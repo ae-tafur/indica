@@ -1,5 +1,6 @@
 # Hidden system files
 .DS_Store
+.idea
 /data/processed/data_blocks_gruplac/
 /data/raw/homologation/
 database/*_database.parquet
