@@ -170,7 +170,7 @@ def plot_top_authors_by_h_index(author_summary, top_n=20, metric='h_index',
     )
 
     fig, ax = plt.subplots(figsize=(10, 8))
-    colors = get_categorical_colors(1)
+    colors = get_categorical_colors(1)  # Always use first color for single category
     ax.barh(df_plot[name_column], df_plot[metric], color=colors[0])
 
     ax.tick_params(axis='x', labelsize=11)
@@ -183,46 +183,40 @@ def plot_top_authors_by_h_index(author_summary, top_n=20, metric='h_index',
     return fig
 
 
-def plot_top_cited_articles(articles_with_citations, top_n=20,
-                            title_column='titulo_del_articulo',
-                            citation_column='cited_by_count'):
+def plot_top_authors_by_2yr_citedness(author_summary, top_n=20, 
+                                     metric='2yr_mean_citedness',
+                                     name_column='author'):
     """
-    Creates a static horizontal bar plot showing the most cited articles.
+    Creates a static horizontal bar plot showing the top authors ranked by 
+    2-year mean citedness (average citations in the last 2 years).
 
     Parameters:
-    articles_with_citations (pd.DataFrame): DOI-deduplicated articles with a
-        citation count column (e.g. output of
-        `analysis.bibliometrics.enrich_with_citations`)
-    top_n (int): Number of top articles to display
-    title_column (str): Column with the article title
-    citation_column (str): Column with the citation count
+    author_summary (pd.DataFrame): One row per author, with 2yr_mean_citedness column
+        (e.g. output of `analysis.bibliometrics.build_author_summary`)
+    top_n (int): Number of top authors to display
+    metric (str): Column name to rank/plot (default: '2yr_mean_citedness')
+    name_column (str): Column with author names
 
     Returns:
     matplotlib.figure.Figure
     """
     df_plot = (
-        articles_with_citations
-        .dropna(subset=[citation_column])
-        .sort_values(citation_column, ascending=False)
+        author_summary
+        .dropna(subset=[metric])
+        .sort_values(metric, ascending=False)
         .head(top_n)
         .iloc[::-1]
-        .copy()
     )
 
-    # Truncate long titles for readability
-    df_plot['_short_title'] = df_plot[title_column].astype(str).apply(
-        lambda t: (t[:70] + '…') if len(t) > 70 else t
-    )
+    fig, ax = plt.subplots(figsize=(10, 8))
+    colors = get_categorical_colors(1)  # Always use first color for single category
+    ax.barh(df_plot[name_column], df_plot[metric], color=colors[0])
 
-    fig, ax = plt.subplots(figsize=(12, 9))
-    colors = get_categorical_colors(2)
-    ax.barh(df_plot['_short_title'], df_plot[citation_column], color=colors[1])
-
-    ax.tick_params(axis='x', labelsize=10)
-    ax.tick_params(axis='y', labelsize=9)
-    plt.title(f'Top {top_n} Most Cited Articles')
-    plt.xlabel('Citations', fontweight='bold', fontsize=12)
-    plt.ylabel('Article', fontweight='bold', fontsize=12)
+    ax.tick_params(axis='x', labelsize=11)
+    ax.tick_params(axis='y', labelsize=11)
+    plt.title(f'Top {top_n} Authors by 2-Year Mean Citedness', fontweight='bold', fontsize=13)
+    plt.xlabel('2-Year Mean Citedness', fontweight='bold', fontsize=12)
+    plt.ylabel('Author', fontweight='bold', fontsize=12)
     plt.tight_layout()
 
     return fig

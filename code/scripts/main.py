@@ -302,13 +302,14 @@ def process_data():
         logger.error(f"Error in data processing: {str(e)}")
         raise
 
-def generate_results(analysis_type=None, mailto=None, affiliation=None):
+def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=None):
     """Step 3: Generate results
 
     Parameters:
     analysis_type (str): 'authors', 'areas', 'gran_areas', 'timeline', 'bibliometrics', or None for all
     mailto (str): Optional email used for OpenAlex's polite pool (bibliometrics only)
     affiliation (str): Optional institution name to disambiguate authors (bibliometrics only)
+    api_key (str): Optional OpenAlex API key for higher rate limits (bibliometrics only)
     """
     try:
         from analysis.utilities import (join_csvs_from_path,
@@ -322,7 +323,7 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None):
         from visualization.visualize_data import (plot_articles_by_year_category,
                                                   plot_author_categories,
                                                   plot_top_authors_by_h_index,
-                                                  plot_top_cited_articles,
+                                                  plot_top_authors_by_2yr_citedness,
                                                   plot_sankey_area_group,
                                                   plot_heatmap_granarea_group)
         import matplotlib.pyplot as plt
@@ -511,28 +512,103 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None):
             # are computed on one row per unique article.
 
             # Article-level citation metrics
-            articles_with_citations = enrich_with_citations(articles_data, doi_column='doi', mailto=mailto)
+            articles_with_citations = enrich_with_citations(articles_data, doi_column='doi', mailto=mailto, api_key=api_key)
             articles_with_citations.to_csv(tables_path / "articles_with_citations.csv", index=False)
             logger.info("✅ Saved: articles_with_citations.csv")
 
             if 'cited_by_count' in articles_with_citations.columns and articles_with_citations['cited_by_count'].sum() > 0:
-                fig7 = plot_top_cited_articles(articles_with_citations, top_n=20)
-                fig7.savefig(figures_path / "top_cited_articles.pdf", format="pdf")
-                logger.info("✅ Saved: top_cited_articles.pdf")
+                # Create table report instead of figure (titles are too long for plot axes)
+                top_cited = articles_with_citations.nlargest(20, 'cited_by_count')[
+                    ['tittle', 'authors', 'year', 'journal', 'cited_by_count', 'doi']
+                ].copy()
+                top_cited = top_cited.reset_index(drop=True)
+                top_cited.index = top_cited.index + 1  # Start index at 1
+                top_cited.to_csv(reports_path / 'top_cited_articles.csv')
+                logger.info("✅ Saved: reports/top_cited_articles.csv")
             else:
-                logger.warning("No citation data could be retrieved from OpenAlex; skipping top cited articles plot.")
+                logger.warning("No citation data could be retrieved from OpenAlex; skipping top cited articles report.")
 
             # Author-level metrics (h-index, i10-index, total works/citations)
-            df_authors, _ = process_authors_dataframe(articles_data, year_column='year', authors_column='authors')
-            df_authors_with_metrics = enrich_authors_with_metrics(
-                df_authors, name_column='author', affiliation=affiliation, mailto=mailto
-            )
-            df_authors_with_metrics.to_csv(tables_path / "authors_with_bibliometric_metrics.csv", index=False)
-            logger.info("✅ Saved: authors_with_bibliometric_metrics.csv")
+            # Filter by department authors only and merge with ORCID data
+            authors_dept_path = PATHS['DATABASE'] / 'authors_dpto_micro.csv'
+            if authors_dept_path.exists():
+                authors_dept = pd.read_csv(authors_dept_path, encoding='utf-8-sig')
+                authors_dept['Autor'] = authors_dept['Autor'].str.strip()
 
-            author_summary = build_author_summary(df_authors_with_metrics, name_column='author')
+                # Check if ORCID column exists
+                has_orcid = 'ORCID' in authors_dept.columns
+                if has_orcid:
+                    logger.info(f"Loaded {len(authors_dept)} authors from department list (with ORCID data)")
+                else:
+                    logger.info(f"Loaded {len(authors_dept)} authors from department list (no ORCID data)")
+
+                dept_author_list = authors_dept['Autor'].tolist()
+
+                df_authors, _ = process_authors_dataframe(articles_data, year_column='year', authors_column='authors')
+                df_authors_filtered = df_authors[df_authors['author'].isin(dept_author_list)]
+                logger.info(f"Filtered authors for bibliometrics: {len(df_authors)} → {len(df_authors_filtered.author.unique())} unique department authors")
+
+                # Merge with ORCID data if available
+                if has_orcid:
+                    df_authors_filtered = pd.merge(
+                        df_authors_filtered,
+                        authors_dept[['Autor', 'ORCID']],
+                        left_on='author',
+                        right_on='Autor',
+                        how='left'
+                    )
+                    df_authors_filtered = df_authors_filtered.drop(columns=['Autor'])
+
+                    # Count authors with ORCID
+                    orcid_count = df_authors_filtered['ORCID'].notna().sum()
+                    logger.info(f"Authors with ORCID: {orcid_count}/{len(df_authors_filtered)} ({orcid_count/len(df_authors_filtered)*100:.1f}%)")
+
+                df_authors_with_metrics = enrich_authors_with_metrics(
+                    df_authors_filtered,
+                    name_column='author',
+                    orcid_column='ORCID' if has_orcid else None,
+                    affiliation=affiliation,
+                    mailto=mailto,
+                    api_key=api_key
+                )
+            else:
+                logger.warning(f"⚠️  Department authors file not found: {authors_dept_path} - using all authors")
+                df_authors, _ = process_authors_dataframe(articles_data, year_column='year', authors_column='authors')
+                df_authors_with_metrics = enrich_authors_with_metrics(
+                    df_authors, name_column='author', affiliation=affiliation, mailto=mailto, api_key=api_key
+                )
+
+            # Build author summary with all metrics (h-index, i10-index, 2yr_mean_citedness, etc.)
+            author_summary = build_author_summary(
+                df_authors_with_metrics,
+                name_column='author',
+                orcid_column='ORCID' if 'ORCID' in df_authors_with_metrics.columns else None
+            )
             author_summary.to_csv(tables_path / "author_summary_h_index.csv", index=False)
             logger.info("✅ Saved: author_summary_h_index.csv")
+
+            # Generate bibliometric reports
+            # Article-level bibliometric stats
+            if 'cited_by_count' in articles_with_citations.columns:
+                article_biblio_stats = articles_with_citations[['tittle', 'doi', 'year', 'cited_by_count', 'fwci',
+                                                                 'openalex_id', 'is_oa', 'oa_status']].copy()
+                article_biblio_stats = article_biblio_stats.sort_values('cited_by_count', ascending=False)
+                article_biblio_stats.to_csv(reports_path / 'article_bibliometrics.csv', index=False)
+                logger.info("✅ Saved: reports/article_bibliometrics.csv")
+
+            # Author-level bibliometric stats (detailed report)
+            if 'h_index' in author_summary.columns:
+                # Select all available bibliometric columns
+                biblio_cols = ['author']
+                optional_cols = ['ORCID', 'orcid', 'display_name', 'h_index', 'i10_index', 
+                               '2yr_mean_citedness', 'works_count', 'cited_by_count_total', 
+                               'affiliation_openalex', 'articulos_en_indica']
+                biblio_cols.extend([col for col in optional_cols if col in author_summary.columns])
+                
+                author_biblio_stats = author_summary[biblio_cols].copy()
+                author_biblio_stats = author_biblio_stats.sort_values('h_index', ascending=False)
+                author_biblio_stats.to_csv(reports_path / 'author_bibliometrics.csv', index=False)
+                logger.info("✅ Saved: reports/author_bibliometrics.csv")
 
             if 'h_index' in author_summary.columns and author_summary['h_index'].notna().any():
                 fig8 = plot_top_authors_by_h_index(author_summary, top_n=20, metric='h_index')
@@ -540,6 +616,13 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None):
                 logger.info("✅ Saved: top_authors_by_h_index.pdf")
             else:
                 logger.warning("No h-index data could be retrieved from OpenAlex; skipping h-index plot.")
+
+            if '2yr_mean_citedness' in author_summary.columns and author_summary['2yr_mean_citedness'].notna().any():
+                fig9 = plot_top_authors_by_2yr_citedness(author_summary, top_n=20, metric='2yr_mean_citedness')
+                fig9.savefig(figures_path / "top_authors_by_2yr_citedness.pdf", format="pdf")
+                logger.info("✅ Saved: top_authors_by_2yr_citedness.pdf")
+            else:
+                logger.warning("No 2yr_mean_citedness data could be retrieved from OpenAlex; skipping 2yr citedness plot.")
 
         logger.info("Visualization completed successfully")
         plt.close('all')
@@ -820,6 +903,12 @@ Examples:
         help='Institution name used to disambiguate authors when querying OpenAlex '
             'for h-index/citations (--analysis bibliometrics)'
     )
+    analysis_group.add_argument(
+        '--api-key',
+        default=None,
+        help='OpenAlex API key for higher rate limits (100k/day vs 100/day). '
+            'Get your free key at https://openalex.org/'
+    )
 
     # Logging
     parser.add_argument(
@@ -874,7 +963,7 @@ def main():
             # Analysis and visualization
             if args.analysis:
                 analysis_type = None if args.analysis == 'all' else args.analysis
-                generate_results(analysis_type, mailto=args.email, affiliation=args.affiliation)
+                generate_results(analysis_type, mailto=args.email, affiliation=args.affiliation, api_key=args.api_key)
 
         logger.info("✅ Application completed successfully!")
 

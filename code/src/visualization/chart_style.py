@@ -38,7 +38,7 @@ PALETA_SECUENCIAL_VERDE = [COLOR_VERDE_CLARO, COLOR_VERDE_PRINCIPAL, COLOR_VERDE
 
 # --- Categorical palette (for comparing UP TO 4 different series/categories) ---
 # Maximum separation under color blindness
-PALETA_CATEGORICA = [COLOR_NARANJA, COLOR_VERDE_PRINCIPAL, COLOR_MORADO, COLOR_ROJO]
+PALETA_CATEGORICA = [COLOR_VERDE_PRINCIPAL, COLOR_NARANJA, COLOR_MORADO, COLOR_ROJO]
 
 # --- Extended categorical palette (if a 5th category is needed) ---
 PALETA_CATEGORICA_EXTENDIDA = PALETA_CATEGORICA + [COLOR_AZUL]
