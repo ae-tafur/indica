@@ -511,10 +511,60 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
             # the on-the-fly fallback above), so citation counts and h-index
             # are computed on one row per unique article.
 
-            # Article-level citation metrics
-            articles_with_citations = enrich_with_citations(articles_data, doi_column='doi', mailto=mailto, api_key=api_key)
+            # Article-level citation metrics with title validation and fallback
+            articles_with_citations, search_info = enrich_with_citations(
+                articles_data, 
+                doi_column='doi', 
+                title_column='tittle',
+                title_similarity_threshold=0.7,
+                use_title_fallback=True,
+                mailto=mailto, 
+                api_key=api_key
+            )
+            
+            # Consolidate metrics columns (remove duplicates from different search methods)
+            # Keep only one set of metrics regardless of search method
+            metrics_to_consolidate = [
+                'openalex_id', 'openalex_title', 'cited_by_count', 'fwci',
+                'referenced_works_count', 'is_oa', 'oa_status', 'concepts',
+                'publication_year_openalex', 'title_similarity', 'openalex_doi'
+            ]
+            
+            # Remove any duplicate columns that might have been created
+            cols_to_drop = [col for col in articles_with_citations.columns 
+                           if col.endswith('_title') and col.replace('_title', '') in metrics_to_consolidate]
+            if cols_to_drop:
+                articles_with_citations = articles_with_citations.drop(columns=cols_to_drop)
+            
+            # Rename doi_validation_status to data_source for clarity
+            if 'doi_validation_status' in articles_with_citations.columns:
+                articles_with_citations = articles_with_citations.rename(
+                    columns={'doi_validation_status': 'openalex_data_source'}
+                )
+                # Simplify values for clarity
+                articles_with_citations['openalex_data_source'] = articles_with_citations['openalex_data_source'].replace({
+                    'valid': 'doi',
+                    'found_by_title': 'title',
+                    'title_mismatch': 'not_found',
+                    'not_found': 'not_found',
+                    'error': 'not_found'
+                })
+            
             articles_with_citations.to_csv(tables_path / "articles_with_citations.csv", index=False)
             logger.info("✅ Saved: articles_with_citations.csv")
+            
+            # Save search info report
+            if not search_info.empty:
+                search_info.to_csv(reports_path / "openalex_search_info.csv", index=False)
+                logger.info(f"✅ Saved: reports/openalex_search_info.csv")
+                
+                # Report on problematic cases
+                problems = search_info[~search_info["validation_status"].isin(["valid", "found_by_title"])]
+                if not problems.empty:
+                    logger.warning(f"⚠️  {len(problems)} articles not found in OpenAlex")
+                    logger.info("   Check reports/openalex_search_info.csv for details")
+            else:
+                logger.info("✅ All articles processed successfully")
 
             if 'cited_by_count' in articles_with_citations.columns and articles_with_citations['cited_by_count'].sum() > 0:
                 # Create table report instead of figure (titles are too long for plot axes)

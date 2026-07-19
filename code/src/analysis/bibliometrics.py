@@ -18,10 +18,13 @@ import time
 import logging
 import requests
 import pandas as pd
+import re
+from difflib import SequenceMatcher
 
 logger = logging.getLogger(__name__)
 
 OPENALEX_WORKS_URL = "https://api.openalex.org/works/https://doi.org/{doi}"
+OPENALEX_WORKS_SEARCH_URL = "https://api.openalex.org/works"
 OPENALEX_AUTHOR_SEARCH_URL = "https://api.openalex.org/authors"
 OPENALEX_AUTHOR_ORCID_URL = "https://api.openalex.org/authors/orcid:{orcid}"
 
@@ -43,12 +46,142 @@ def clean_doi(doi):
     return doi.strip("/ ") or None
 
 
-def fetch_work_metrics(doi, mailto=None, api_key=None, timeout=10, max_retries=3):
+def normalize_title_for_comparison(title):
+    """
+    Normalizes a title for comparison by removing punctuation, extra spaces,
+    and converting to lowercase.
+    """
+    if pd.isna(title) or not title:
+        return ""
+    title = str(title).lower()
+    # Remove punctuation and special characters
+    title = re.sub(r'[^\w\s]', ' ', title)
+    # Remove extra whitespace
+    title = re.sub(r'\s+', ' ', title)
+    return title.strip()
+
+
+def calculate_title_similarity(title1, title2):
+    """
+    Calculates the similarity ratio between two titles using SequenceMatcher.
+    
+    Returns:
+    float: Similarity ratio between 0 and 1 (1 = identical)
+    """
+    norm1 = normalize_title_for_comparison(title1)
+    norm2 = normalize_title_for_comparison(title2)
+    
+    if not norm1 or not norm2:
+        return 0.0
+    
+    return SequenceMatcher(None, norm1, norm2).ratio()
+
+
+def search_work_by_title(title, title_similarity_threshold=0.7, mailto=None, 
+                        api_key=None, timeout=10, max_results=5):
+    """
+    Searches OpenAlex for a work by title and returns the best match if similarity
+    is above threshold.
+    
+    This is used as a fallback when DOI is missing or invalid.
+
+    Parameters:
+    title (str): Title to search for
+    title_similarity_threshold (float): Minimum similarity ratio to accept match
+    mailto (str): Optional email for OpenAlex polite pool
+    api_key (str): Optional API key for higher rate limits
+    timeout (int): Request timeout in seconds
+    max_results (int): Maximum number of results to check
+
+    Returns:
+    dict: Work metrics if match found, empty dict otherwise
+    """
+    if not title or pd.isna(title):
+        return {}
+    
+    params = {
+        "search": title,
+        "per_page": max_results
+    }
+    if mailto:
+        params["mailto"] = mailto
+    if api_key:
+        params["api_key"] = api_key
+    
+    try:
+        resp = requests.get(OPENALEX_WORKS_SEARCH_URL, params=params, timeout=timeout)
+        if resp.status_code != 200:
+            logger.warning(f"OpenAlex title search failed ({resp.status_code}) for '{title[:50]}...'")
+            return {}
+        
+        results = resp.json().get("results", [])
+        if not results:
+            logger.debug(f"No results found for title: {title[:50]}...")
+            return {}
+        
+        # Find best match by title similarity
+        best_match = None
+        best_similarity = 0.0
+        
+        for result in results:
+            openalex_title = result.get("display_name", "")
+            similarity = calculate_title_similarity(title, openalex_title)
+            
+            if similarity > best_similarity:
+                best_similarity = similarity
+                best_match = result
+        
+        # Check if best match meets threshold
+        if best_similarity < title_similarity_threshold:
+            logger.debug(
+                f"Best match for '{title[:50]}...' has similarity {best_similarity:.2f} "
+                f"(below threshold {title_similarity_threshold})"
+            )
+            return {}
+        
+        # Extract metrics from best match
+        data = best_match
+        open_access = data.get("open_access", {}) or {}
+        concepts = data.get("concepts", []) or []
+        fwci = data.get("fwci")
+        
+        logger.info(
+            f"✓ Found match by title search (similarity: {best_similarity:.2f}): "
+            f"{data.get('display_name', '')[:60]}..."
+        )
+        
+        return {
+            "openalex_id": data.get("id", ""),
+            "openalex_title": data.get("display_name", ""),
+            "cited_by_count": data.get("cited_by_count", 0),
+            "fwci": fwci if fwci is not None else "",
+            "referenced_works_count": len(data.get("referenced_works", []) or []),
+            "is_oa": open_access.get("is_oa", False),
+            "oa_status": open_access.get("oa_status", ""),
+            "concepts": ", ".join(c.get("display_name", "") for c in concepts[:5]),
+            "publication_year_openalex": data.get("publication_year", ""),
+            "doi_validation_status": "found_by_title",
+            "title_similarity": best_similarity,
+            "openalex_doi": data.get("doi", ""),
+        }
+        
+    except requests.RequestException as e:
+        logger.warning(f"Connection error searching by title '{title[:50]}...': {e}")
+        return {}
+
+
+def fetch_work_metrics(doi, expected_title=None, title_similarity_threshold=0.7, 
+                      mailto=None, api_key=None, timeout=10, max_retries=3):
     """
     Queries OpenAlex for a single DOI and returns citation metrics.
+    
+    Validates that the DOI corresponds to the expected article by comparing titles.
+    This prevents incorrect matches when DOIs point to journals or wrong articles.
 
     Parameters:
     doi (str): DOI of the article (any common format is accepted)
+    expected_title (str): Optional expected title of the article for validation
+    title_similarity_threshold (float): Minimum similarity ratio (0-1) to accept match (default 0.7)
     mailto (str): Optional email address to use OpenAlex's "polite pool"
         (faster and more reliable rate limits). See
         https://docs.openalex.org/how-to-use-the-api/rate-limits-and-authentication
@@ -58,7 +191,7 @@ def fetch_work_metrics(doi, mailto=None, api_key=None, timeout=10, max_retries=3
     max_retries (int): Number of retries on transient failures
 
     Returns:
-    dict: Citation metrics (empty dict if the DOI could not be resolved)
+    dict: Citation metrics (empty dict if the DOI could not be resolved or title mismatch)
     """
     doi_clean = clean_doi(doi)
     if not doi_clean:
@@ -77,6 +210,30 @@ def fetch_work_metrics(doi, mailto=None, api_key=None, timeout=10, max_retries=3
             resp = requests.get(url, params=params, timeout=timeout)
             if resp.status_code == 200:
                 data = resp.json()
+                
+                # Validate title if expected_title is provided
+                openalex_title = data.get("display_name", "")
+                title_valid = True
+                title_similarity = None
+                
+                if expected_title and openalex_title:
+                    title_similarity = calculate_title_similarity(expected_title, openalex_title)
+                    title_valid = title_similarity >= title_similarity_threshold
+                    
+                    if not title_valid:
+                        logger.warning(
+                            f"Title mismatch for DOI {doi_clean} (similarity: {title_similarity:.2f})\n"
+                            f"  Expected: {expected_title[:80]}\n"
+                            f"  OpenAlex: {openalex_title[:80]}\n"
+                            f"  This DOI may point to a journal or wrong article."
+                        )
+                        return {
+                            "doi_validation_status": "title_mismatch",
+                            "title_similarity": title_similarity,
+                            "expected_title": expected_title,
+                            "openalex_title": openalex_title,
+                        }
+                
                 open_access = data.get("open_access", {}) or {}
                 concepts = data.get("concepts", []) or []
 
@@ -88,8 +245,9 @@ def fetch_work_metrics(doi, mailto=None, api_key=None, timeout=10, max_retries=3
                     # OpenAlex provides various citation metrics
                     fwci = data.get("fwci")  # Field-Weighted Citation Impact
 
-                return {
+                result = {
                     "openalex_id": data.get("id", ""),
+                    "openalex_title": openalex_title,
                     "cited_by_count": data.get("cited_by_count", 0),
                     "fwci": fwci if fwci is not None else "",
                     "referenced_works_count": len(data.get("referenced_works", []) or []),
@@ -97,10 +255,17 @@ def fetch_work_metrics(doi, mailto=None, api_key=None, timeout=10, max_retries=3
                     "oa_status": open_access.get("oa_status", ""),
                     "concepts": ", ".join(c.get("display_name", "") for c in concepts[:5]),
                     "publication_year_openalex": data.get("publication_year", ""),
+                    "doi_validation_status": "valid" if title_valid else "title_mismatch",
                 }
+                
+                if title_similarity is not None:
+                    result["title_similarity"] = title_similarity
+                
+                return result
+                
             elif resp.status_code == 404:
                 logger.warning(f"DOI not found in OpenAlex: {doi_clean}")
-                return {}
+                return {"doi_validation_status": "not_found"}
             elif resp.status_code == 429:
                 wait_time = 5 * (attempt + 1)
                 logger.warning(f"Rate limited by OpenAlex, waiting {wait_time}s before retry...")
@@ -112,7 +277,7 @@ def fetch_work_metrics(doi, mailto=None, api_key=None, timeout=10, max_retries=3
             logger.warning(f"Connection error fetching DOI {doi_clean}: {e}")
         time.sleep(1)
 
-    return {}
+    return {"doi_validation_status": "error"}
 
 
 def fetch_citing_works(doi, mailto=None, timeout=10, per_page=25):
@@ -162,53 +327,203 @@ def fetch_citing_works(doi, mailto=None, timeout=10, per_page=25):
         return []
 
 
-def enrich_with_citations(df, doi_column="doi", mailto=None, api_key=None, sleep_between=0.5):
+def enrich_with_citations(df, doi_column="doi", title_column="tittle", 
+                         title_similarity_threshold=0.7, use_title_fallback=True,
+                         mailto=None, api_key=None, sleep_between=0.5):
     """
     Adds citation metrics (cited_by_count, oa_status, concepts, etc.) to a
-    DataFrame of articles by querying the OpenAlex API for each unique DOI.
+    DataFrame of articles by querying the OpenAlex API.
+    
+    Strategy:
+    1. Try DOI lookup first (if DOI exists and is valid)
+    2. Validate DOI result by comparing titles (similarity >= threshold)
+    3. If DOI fails or is missing, fallback to title search
+    4. Validate title search result (similarity >= threshold)
 
     IMPORTANT: run this on a DOI-deduplicated DataFrame (one row per article)
     to avoid inflating citation totals.
 
     Parameters:
-    df (pd.DataFrame): DataFrame with a DOI column (ideally deduplicated)
+    df (pd.DataFrame): DataFrame with DOI and/or title columns
     doi_column (str): Name of the DOI column
+    title_column (str): Name of the title column for validation and fallback search
+    title_similarity_threshold (float): Minimum similarity (0-1) to accept match (default 0.7)
+    use_title_fallback (bool): Use title search when DOI fails (default True)
     mailto (str): Optional email to use OpenAlex's polite pool
     api_key (str): Optional API key for higher rate limits (recommended)
     sleep_between (float): Delay (seconds) between requests to be nice to the API
         (default 0.5s, increase if getting rate limited)
 
     Returns:
-    pd.DataFrame: Original DataFrame with additional citation metric columns
+    tuple: (DataFrame with citation metrics, DataFrame with search info)
     """
     df = df.copy()
-    unique_dois = df[doi_column].dropna().unique()
+    
+    # Create lookup structures
+    doi_title_map = {}
+    title_only_articles = []
+    
+    if title_column and title_column in df.columns:
+        for idx, row in df.iterrows():
+            doi = row.get(doi_column)
+            title = row.get(title_column)
+            
+            if doi and not pd.isna(doi) and clean_doi(doi):
+                if title and not pd.isna(title):
+                    doi_title_map[doi] = title
+            elif title and not pd.isna(title):
+                # Articles without DOI - will search by title
+                title_only_articles.append(title)
+    
+    unique_dois = df[doi_column].dropna().unique() if doi_column in df.columns else []
     unique_dois = [d for d in unique_dois if clean_doi(d)]
-
-    logger.info(f"Fetching citation metrics for {len(unique_dois)} unique DOIs from OpenAlex...")
+    
+    logger.info(f"Fetching citation metrics from OpenAlex...")
+    logger.info(f"  Articles with DOI: {len(unique_dois)}")
+    logger.info(f"  Articles without DOI (title search): {len(set(title_only_articles))}")
+    logger.info(f"  Title validation threshold: {title_similarity_threshold}")
+    if use_title_fallback:
+        logger.info(f"  Title fallback enabled for failed DOI lookups")
+    
     if not api_key:
         logger.warning("No API key provided - you may experience rate limiting. "
                       "Get a free key at https://openalex.org/ for 100k requests/day")
 
-    metrics_by_doi = {}
+    metrics_by_key = {}  # key can be DOI or title
+    search_info = []
+    
+    # Process articles with DOI
     for i, doi in enumerate(unique_dois, start=1):
-        metrics_by_doi[doi] = fetch_work_metrics(doi, mailto=mailto, api_key=api_key)
+        expected_title = doi_title_map.get(doi)
+        
+        # Try DOI lookup first
+        metrics = fetch_work_metrics(
+            doi, 
+            expected_title=expected_title,
+            title_similarity_threshold=title_similarity_threshold,
+            mailto=mailto, 
+            api_key=api_key
+        )
+        
+        validation_status = metrics.get("doi_validation_status", "valid")
+        search_method = "doi"
+        
+        # If DOI failed and we have title, try title search
+        if validation_status != "valid" and use_title_fallback and expected_title:
+            logger.info(f"  DOI validation failed for '{doi}', trying title search...")
+            title_metrics = search_work_by_title(
+                expected_title,
+                title_similarity_threshold=title_similarity_threshold,
+                mailto=mailto,
+                api_key=api_key
+            )
+            
+            if title_metrics:
+                metrics = title_metrics
+                search_method = "title_fallback"
+                validation_status = "found_by_title"
+        
+        metrics_by_key[doi] = metrics
+        
+        # Track search info
+        search_info.append({
+            "lookup_key": doi,
+            "lookup_type": "doi",
+            "search_method": search_method,
+            "validation_status": validation_status,
+            "expected_title": expected_title,
+            "openalex_title": metrics.get("openalex_title", ""),
+            "title_similarity": metrics.get("title_similarity", 0),
+            "cited_by_count": metrics.get("cited_by_count", 0),
+            "openalex_doi": metrics.get("openalex_doi", ""),
+        })
+        
         if i % 25 == 0:
             logger.info(f"  Processed {i}/{len(unique_dois)} DOIs...")
         time.sleep(sleep_between)
+    
+    # Process articles without DOI (search by title)
+    unique_titles = list(set(title_only_articles))
+    for i, title in enumerate(unique_titles, start=1):
+        metrics = search_work_by_title(
+            title,
+            title_similarity_threshold=title_similarity_threshold,
+            mailto=mailto,
+            api_key=api_key
+        )
+        
+        metrics_by_key[title] = metrics
+        
+        validation_status = metrics.get("doi_validation_status", "not_found")
+        
+        search_info.append({
+            "lookup_key": title,
+            "lookup_type": "title",
+            "search_method": "title",
+            "validation_status": validation_status,
+            "expected_title": title,
+            "openalex_title": metrics.get("openalex_title", ""),
+            "title_similarity": metrics.get("title_similarity", 0),
+            "cited_by_count": metrics.get("cited_by_count", 0),
+            "openalex_doi": metrics.get("openalex_doi", ""),
+        })
+        
+        if i % 25 == 0:
+            logger.info(f"  Processed {i}/{len(unique_titles)} titles...")
+        time.sleep(sleep_between)
 
-    if not metrics_by_doi:
+    if not metrics_by_key:
         logger.warning("No citation metrics were retrieved.")
-        return df
+        return df, pd.DataFrame()
 
-    metrics_df = pd.DataFrame.from_dict(metrics_by_doi, orient="index").reset_index()
-    metrics_df = metrics_df.rename(columns={"index": doi_column})
-
-    df = pd.merge(df, metrics_df, on=doi_column, how="left")
+    # Merge metrics back to dataframe
+    # For DOI-based lookups
+    if doi_column in df.columns and unique_dois:
+        metrics_df_doi = pd.DataFrame.from_dict(
+            {k: v for k, v in metrics_by_key.items() if k in unique_dois}, 
+            orient="index"
+        ).reset_index()
+        metrics_df_doi = metrics_df_doi.rename(columns={"index": doi_column})
+        df = pd.merge(df, metrics_df_doi, on=doi_column, how="left")
+    
+    # For title-based lookups (no DOI)
+    if title_column in df.columns and unique_titles:
+        metrics_df_title = pd.DataFrame.from_dict(
+            {k: v for k, v in metrics_by_key.items() if k in unique_titles}, 
+            orient="index"
+        ).reset_index()
+        metrics_df_title = metrics_df_title.rename(columns={"index": title_column})
+        
+        # Merge only for rows without DOI metrics
+        mask_no_doi = df["openalex_id"].isna() if "openalex_id" in df.columns else df[doi_column].isna()
+        df_no_doi = df[mask_no_doi].copy()
+        df_with_doi = df[~mask_no_doi].copy()
+        
+        df_no_doi = pd.merge(df_no_doi, metrics_df_title, on=title_column, how="left", suffixes=('', '_title'))
+        df = pd.concat([df_with_doi, df_no_doi], ignore_index=True)
+    
+    # Set cited_by_count to 0 for invalid results
     if "cited_by_count" in df.columns:
+        valid_statuses = ["valid", "found_by_title"]
+        df.loc[~df["doi_validation_status"].isin(valid_statuses), "cited_by_count"] = 0
         df["cited_by_count"] = df["cited_by_count"].fillna(0).astype(int)
+    
+    # Create search info DataFrame
+    search_info_df = pd.DataFrame(search_info)
+    
+    if not search_info_df.empty:
+        # Summary statistics
+        total = len(search_info_df)
+        found_by_doi = len(search_info_df[search_info_df["validation_status"] == "valid"])
+        found_by_title = len(search_info_df[search_info_df["validation_status"] == "found_by_title"])
+        not_found = total - found_by_doi - found_by_title
+        
+        logger.info(f"\n📊 OpenAlex lookup summary:")
+        logger.info(f"  ✓ Found by DOI: {found_by_doi}/{total} ({found_by_doi/total*100:.1f}%)")
+        logger.info(f"  ✓ Found by title search: {found_by_title}/{total} ({found_by_title/total*100:.1f}%)")
+        logger.info(f"  ✗ Not found: {not_found}/{total} ({not_found/total*100:.1f}%)")
 
-    return df
+    return df, search_info_df
 
 
 def fetch_author_metrics_by_orcid(orcid, mailto=None, api_key=None, timeout=10):
