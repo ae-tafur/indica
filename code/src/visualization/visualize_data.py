@@ -6,7 +6,9 @@ from visualization.chart_style import (
     get_publindex_colors,
     get_categorical_colors,
     PALETA_PUBLINDEX,
-    PALETA_SECUENCIAL_VERDE
+    PALETA_SECUENCIAL_VERDE,
+    COLOR_ROJO,
+    COLOR_VERDE_PRINCIPAL
 )
 
 
@@ -313,4 +315,310 @@ def plot_heatmap_granarea_group(df, granarea_col='gran_area', group_col='filenam
     ax.tick_params(axis='y', labelsize=10, rotation=0)
 
     plt.tight_layout()
+    return fig
+
+
+def plot_treemap_granarea(df, granarea_col='gran_area', value_col=None):
+    """
+    Creates a treemap showing the distribution of articles by gran_area.
+    Uses squarify library for treemap visualization.
+
+    Parameters:
+    df (pd.DataFrame): Input DataFrame
+    granarea_col (str): Column name for gran areas
+    value_col (str): Column to count (if None, counts rows)
+
+    Returns:
+    matplotlib.figure.Figure: The plot figure
+    """
+    import squarify
+    
+    # Prepare data
+    if value_col:
+        area_counts = df.groupby(granarea_col)[value_col].sum().sort_values(ascending=False)
+    else:
+        area_counts = df[granarea_col].value_counts()
+    
+    # Remove NaN
+    area_counts = area_counts[area_counts.index.notna()]
+    
+    if area_counts.empty:
+        # Return empty figure if no data
+        fig, ax = plt.subplots(figsize=(12, 8))
+        ax.text(0.5, 0.5, 'No data available', ha='center', va='center')
+        return fig
+    
+    # Prepare labels with counts and percentages
+    total = area_counts.sum()
+    labels = [f"{area}\n{count} ({count/total*100:.1f}%)" 
+             for area, count in area_counts.items()]
+    
+    # Create figure
+    fig, ax = plt.subplots(figsize=(14, 10))
+    
+    # Get colors
+    n_areas = len(area_counts)
+    colors = get_categorical_colors(n_areas)
+    
+    # Create treemap
+    squarify.plot(sizes=area_counts.values, 
+                 label=labels, 
+                 color=colors,
+                 alpha=0.8,
+                 text_kwargs={'fontsize': 10, 'weight': 'bold'},
+                 ax=ax)
+    
+    ax.set_title('Articles Distribution by Gran Area', 
+                fontweight='bold', fontsize=14, pad=20)
+    ax.axis('off')
+    
+    plt.tight_layout()
+    return fig
+
+
+def plot_language_distribution(df, language_col='language'):
+    """
+    Creates a donut chart showing the distribution of articles by publication language.
+
+    Parameters:
+    df (pd.DataFrame): Input DataFrame with language data
+    language_col (str): Column name for language
+
+    Returns:
+    matplotlib.figure.Figure: The plot figure
+    """
+    # Prepare data
+    df_clean = df[df[language_col].notna()].copy()
+
+    if df_clean.empty:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.text(0.5, 0.5, 'No language data available', ha='center', va='center')
+        return fig
+
+    # Count articles by language
+    lang_counts = df_clean[language_col].value_counts()
+
+    # Convert language codes to names (common ones)
+    lang_names = {
+        'en': 'English',
+        'es': 'Spanish',
+        'pt': 'Portuguese',
+        'fr': 'French',
+        'de': 'German',
+        'it': 'Italian',
+        'zh': 'Chinese',
+        'ja': 'Japanese',
+        'ru': 'Russian',
+        'ar': 'Arabic',
+    }
+
+    lang_counts.index = [lang_names.get(code, code.upper()) for code in lang_counts.index]
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    # Get colors
+    n_langs = len(lang_counts)
+    colors = get_categorical_colors(n_langs)
+
+    # Create donut chart
+    wedges, texts, autotexts = ax.pie(
+        lang_counts.values,
+        labels=lang_counts.index,
+        autopct='%1.1f%%',
+        colors=colors,
+        startangle=90,
+        wedgeprops=dict(width=0.5, edgecolor='white'),
+        textprops={'fontsize': 11, 'weight': 'bold'}
+    )
+
+    # Improve percentage text readability
+    for autotext in autotexts:
+        autotext.set_color('white')
+        autotext.set_fontsize(10)
+
+    # Add center text showing total articles
+    total = lang_counts.sum()
+    ax.text(0, 0, f'{total}\nArticles',
+           ha='center', va='center', fontsize=16, fontweight='bold')
+
+    ax.set_title('Articles Distribution by Language',
+                fontweight='bold', fontsize=14, pad=20)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_open_access_distribution(df, oa_col='is_oa'):
+    """
+    Creates a donut chart showing the distribution of Open Access vs Closed Access articles.
+
+    Parameters:
+    df (pd.DataFrame): Input DataFrame with OA data
+    oa_col (str): Column name for Open Access status
+
+    Returns:
+    matplotlib.figure.Figure: The plot figure
+    """
+    # Prepare data
+    df_clean = df[df[oa_col].notna()].copy()
+
+    if df_clean.empty:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.text(0.5, 0.5, 'No Open Access data available', ha='center', va='center')
+        return fig
+
+    # Convert to boolean if needed
+    df_clean[oa_col] = df_clean[oa_col].astype(bool)
+
+    # Count OA vs Closed - reorder to show Open Access first
+    oa_counts = df_clean[oa_col].value_counts().reindex([True, False], fill_value=0)
+    labels = ['Open Access' if val else 'Closed Access' for val in oa_counts.index]
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    # Colors: institutional green for OA, institutional red for closed
+    colors = [COLOR_VERDE_PRINCIPAL if val else COLOR_ROJO for val in oa_counts.index]
+
+    # Create donut chart
+    wedges, texts, autotexts = ax.pie(
+        oa_counts.values,
+        labels=labels,
+        autopct='%1.1f%%',
+        colors=colors,
+        startangle=90,
+        wedgeprops=dict(width=0.5, edgecolor='white'),
+        textprops={'fontsize': 12, 'weight': 'bold'}
+    )
+
+    # Improve percentage text readability
+    for autotext in autotexts:
+        autotext.set_color('white')
+        autotext.set_fontsize(11)
+
+    # Add center text showing total articles
+    total = oa_counts.sum()
+    ax.text(0, 0, f'{total}\nArticles',
+           ha='center', va='center', fontsize=16, fontweight='bold')
+
+    ax.set_title('Articles Distribution by Access Type',
+                fontweight='bold', fontsize=14, pad=20)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_countries_distribution(df, countries_col='openalex_countries', top_n=15):
+    """
+    Creates a horizontal bar chart showing the distribution of articles by country.
+
+    Parameters:
+    df (pd.DataFrame): Input DataFrame with countries data
+    countries_col (str): Column name for countries (semicolon-separated)
+    top_n (int): Number of top countries to display
+
+    Returns:
+    matplotlib.figure.Figure: The plot figure
+    """
+    # Prepare data - expand semicolon-separated countries
+    all_countries = []
+    for countries_str in df[countries_col].dropna():
+        if countries_str:
+            countries_list = [c.strip() for c in str(countries_str).split(';')]
+            all_countries.extend(countries_list)
+
+    if not all_countries:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.text(0.5, 0.5, 'No country data available', ha='center', va='center')
+        return fig
+
+    # Count and get top countries
+    import pandas as pd
+    country_counts = pd.Series(all_countries).value_counts().head(top_n).iloc[::-1]
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    colors = get_categorical_colors(1)
+    ax.barh(country_counts.index, country_counts.values, color=colors[0])
+
+    ax.set_xlabel('Number of Articles', fontweight='bold', fontsize=12)
+    ax.set_ylabel('Country', fontweight='bold', fontsize=12)
+    ax.set_title(f'Top {top_n} Countries by Articles',
+                fontweight='bold', fontsize=14, pad=20)
+    ax.tick_params(axis='both', labelsize=11)
+    ax.grid(axis='x', alpha=0.3)
+
+    plt.tight_layout()
+    return fig
+
+
+def plot_journals_analysis(df, journal_col='journal', citations_col='cited_by_count', top_n=20):
+    """
+    Creates a dual-axis plot showing:
+    - Number of articles per journal (bars)
+    - Total citations per journal (line)
+    
+    Parameters:
+    df (pd.DataFrame): Input DataFrame with journal and citations data
+    journal_col (str): Column name for journal names
+    citations_col (str): Column name for citation counts
+    top_n (int): Number of top journals to display
+
+    Returns:
+    matplotlib.figure.Figure: The plot figure
+    """
+    # Prepare data
+    df_clean = df[[journal_col, citations_col]].copy()
+    df_clean = df_clean[df_clean[journal_col].notna()]
+    
+    # Convert citations to numeric
+    df_clean[citations_col] = pd.to_numeric(df_clean[citations_col], errors='coerce').fillna(0)
+    
+    # Group by journal
+    journal_stats = df_clean.groupby(journal_col).agg({
+        citations_col: ['count', 'sum']
+    }).reset_index()
+    journal_stats.columns = [journal_col, 'num_articles', 'total_citations']
+    
+    # Sort by number of articles and get top N
+    journal_stats = journal_stats.sort_values('num_articles', ascending=False).head(top_n)
+    journal_stats = journal_stats.iloc[::-1]  # Reverse for horizontal plot
+    
+    # Truncate long journal names
+    journal_stats['journal_short'] = journal_stats[journal_col].apply(
+        lambda x: (x[:50] + '...') if len(str(x)) > 50 else x
+    )
+    
+    # Create figure with dual y-axis
+    fig, ax1 = plt.subplots(figsize=(12, 10))
+    
+    colors = get_categorical_colors(2)
+    
+    # Plot number of articles (bars)
+    ax1.barh(journal_stats['journal_short'], journal_stats['num_articles'], 
+            color=colors[0], alpha=0.7, label='Number of Articles')
+    ax1.set_xlabel('Number of Articles', fontweight='bold', fontsize=12)
+    ax1.set_ylabel('Journal', fontweight='bold', fontsize=12)
+    ax1.tick_params(axis='y', labelsize=9)
+    ax1.tick_params(axis='x', labelsize=11, labelcolor=colors[0])
+    
+    # Create second y-axis for citations
+    ax2 = ax1.twiny()
+    ax2.plot(journal_stats['total_citations'], journal_stats['journal_short'], 
+            marker='o', color=colors[1], linewidth=2, markersize=8, label='Total Citations')
+    ax2.set_xlabel('Total Citations', fontweight='bold', fontsize=12, color=colors[1])
+    ax2.tick_params(axis='x', labelsize=11, labelcolor=colors[1])
+    ax2.grid(axis='x', alpha=0.3, linestyle='--')
+    
+    # Add legend
+    lines1, labels1 = ax1.get_legend_handles_labels()
+    lines2, labels2 = ax2.get_legend_handles_labels()
+    ax1.legend(lines1 + lines2, labels1 + labels2, loc='lower right', fontsize=10)
+    
+    plt.title(f'Top {top_n} Journals: Articles and Citations', 
+             fontweight='bold', fontsize=14, pad=20)
+    plt.tight_layout()
+    
     return fig

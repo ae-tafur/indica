@@ -77,6 +77,130 @@ def calculate_title_similarity(title1, title2):
     return SequenceMatcher(None, norm1, norm2).ratio()
 
 
+def extract_authors_info(authorships):
+    """
+    Extracts author names, institutions, and countries from OpenAlex authorships data.
+    
+    Parameters:
+    authorships (list): List of authorship objects from OpenAlex
+    
+    Returns:
+    tuple: (authors_str, institutions_str, countries_str) - semicolon-separated strings
+    """
+    if not authorships:
+        return "", "", ""
+    
+    authors = []
+    institutions = []
+    countries = []
+    
+    for authorship in authorships:
+        author = authorship.get("author", {})
+        if author:
+            author_name = author.get("display_name", "")
+            if author_name:
+                authors.append(author_name)
+        
+        # Get institutions for this author
+        author_institutions = authorship.get("institutions", [])
+        for inst in author_institutions:
+            inst_name = inst.get("display_name", "")
+            country_code = inst.get("country_code", "")
+            
+            if inst_name and inst_name not in institutions:
+                institutions.append(inst_name)
+            
+            if country_code and country_code not in countries:
+                countries.append(country_code)
+    
+    authors_str = "; ".join(authors) if authors else ""
+    institutions_str = "; ".join(institutions) if institutions else ""
+    countries_str = "; ".join(countries) if countries else ""
+    
+    return authors_str, institutions_str, countries_str
+
+
+def generate_apa_citation(data):
+    """
+    Generates an APA-style citation from OpenAlex work data.
+    
+    Parameters:
+    data (dict): OpenAlex work data
+    
+    Returns:
+    str: APA-formatted citation
+    """
+    try:
+        # Authors
+        authorships = data.get("authorships", [])
+        authors_list = []
+        for authorship in authorships[:20]:  # Limit to first 20 authors
+            author = authorship.get("author", {})
+            name = author.get("display_name", "")
+            if name:
+                authors_list.append(name)
+        
+        if not authors_list:
+            authors_str = ""
+        elif len(authors_list) == 1:
+            authors_str = authors_list[0]
+        elif len(authors_list) == 2:
+            authors_str = f"{authors_list[0]}, & {authors_list[1]}"
+        else:
+            if len(authorships) > 20:
+                authors_str = ", ".join(authors_list[:19]) + ", ... " + authors_list[-1]
+            else:
+                authors_str = ", ".join(authors_list[:-1]) + f", & {authors_list[-1]}"
+        
+        # Year
+        year = data.get("publication_year", "n.d.")
+        
+        # Title
+        title = data.get("display_name", "Untitled")
+        
+        # Journal/Source
+        primary_location = data.get("primary_location", {}) or {}
+        source = primary_location.get("source", {}) or {}
+        journal = source.get("display_name", "")
+        
+        # Volume, Issue, Pages
+        biblio = data.get("biblio", {}) or {}
+        volume = biblio.get("volume", "")
+        issue = biblio.get("issue", "")
+        pages = f"{biblio.get('first_page', '')}-{biblio.get('last_page', '')}" if biblio.get('first_page') else ""
+        
+        # DOI
+        doi = data.get("doi", "")
+        
+        # Construct citation
+        citation_parts = []
+        
+        if authors_str:
+            citation_parts.append(f"{authors_str}.")
+        
+        citation_parts.append(f"({year}).")
+        citation_parts.append(f"{title}.")
+        
+        if journal:
+            journal_part = f"*{journal}*"
+            if volume:
+                journal_part += f", {volume}"
+                if issue:
+                    journal_part += f"({issue})"
+            if pages:
+                journal_part += f", {pages}"
+            citation_parts.append(journal_part + ".")
+        
+        if doi:
+            citation_parts.append(f"https://doi.org/{doi}")
+        
+        return " ".join(citation_parts)
+        
+    except Exception as e:
+        logger.warning(f"Error generating APA citation: {e}")
+        return ""
+
+
 def search_work_by_title(title, title_similarity_threshold=0.7, mailto=None, 
                         api_key=None, timeout=10, max_results=5):
     """
@@ -143,7 +267,21 @@ def search_work_by_title(title, title_similarity_threshold=0.7, mailto=None,
         data = best_match
         open_access = data.get("open_access", {}) or {}
         concepts = data.get("concepts", []) or []
+        authorships = data.get("authorships", [])
         fwci = data.get("fwci")
+        
+        # Extract authors, institutions, and countries
+        authors_str, institutions_str, countries_str = extract_authors_info(authorships)
+        
+        # Get language
+        language = data.get("language", "")
+        
+        # Get detailed OA information
+        oa_url = open_access.get("oa_url", "")
+        any_repository_has_fulltext = open_access.get("any_repository_has_fulltext", False)
+        
+        # Generate APA citation
+        apa_citation = generate_apa_citation(data)
         
         logger.info(
             f"✓ Found match by title search (similarity: {best_similarity:.2f}): "
@@ -158,8 +296,15 @@ def search_work_by_title(title, title_similarity_threshold=0.7, mailto=None,
             "referenced_works_count": len(data.get("referenced_works", []) or []),
             "is_oa": open_access.get("is_oa", False),
             "oa_status": open_access.get("oa_status", ""),
+            "oa_url": oa_url,
+            "any_repository_has_fulltext": any_repository_has_fulltext,
+            "language": language,
+            "openalex_authors": authors_str,
+            "openalex_institutions": institutions_str,
+            "openalex_countries": countries_str,
             "concepts": ", ".join(c.get("display_name", "") for c in concepts[:5]),
             "publication_year_openalex": data.get("publication_year", ""),
+            "citation_apa_openalex": apa_citation,
             "doi_validation_status": "found_by_title",
             "title_similarity": best_similarity,
             "openalex_doi": data.get("doi", ""),
@@ -236,6 +381,7 @@ def fetch_work_metrics(doi, expected_title=None, title_similarity_threshold=0.7,
                 
                 open_access = data.get("open_access", {}) or {}
                 concepts = data.get("concepts", []) or []
+                authorships = data.get("authorships", [])
 
                 # Get FWCI from citation metrics (available since 2024 in OpenAlex)
                 fwci = None
@@ -245,6 +391,19 @@ def fetch_work_metrics(doi, expected_title=None, title_similarity_threshold=0.7,
                     # OpenAlex provides various citation metrics
                     fwci = data.get("fwci")  # Field-Weighted Citation Impact
 
+                # Extract authors, institutions, and countries
+                authors_str, institutions_str, countries_str = extract_authors_info(authorships)
+                
+                # Get language
+                language = data.get("language", "")
+                
+                # Get detailed OA information
+                oa_url = open_access.get("oa_url", "")
+                any_repository_has_fulltext = open_access.get("any_repository_has_fulltext", False)
+                
+                # Generate APA citation
+                apa_citation = generate_apa_citation(data)
+
                 result = {
                     "openalex_id": data.get("id", ""),
                     "openalex_title": openalex_title,
@@ -253,8 +412,15 @@ def fetch_work_metrics(doi, expected_title=None, title_similarity_threshold=0.7,
                     "referenced_works_count": len(data.get("referenced_works", []) or []),
                     "is_oa": open_access.get("is_oa", False),
                     "oa_status": open_access.get("oa_status", ""),
+                    "oa_url": oa_url,
+                    "any_repository_has_fulltext": any_repository_has_fulltext,
+                    "language": language,
+                    "openalex_authors": authors_str,
+                    "openalex_institutions": institutions_str,
+                    "openalex_countries": countries_str,
                     "concepts": ", ".join(c.get("display_name", "") for c in concepts[:5]),
                     "publication_year_openalex": data.get("publication_year", ""),
+                    "citation_apa_openalex": apa_citation,
                     "doi_validation_status": "valid" if title_valid else "title_mismatch",
                 }
                 

@@ -325,7 +325,12 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
                                                   plot_top_authors_by_h_index,
                                                   plot_top_authors_by_2yr_citedness,
                                                   plot_sankey_area_group,
-                                                  plot_heatmap_granarea_group)
+                                                  plot_heatmap_granarea_group,
+                                                  plot_treemap_granarea,
+                                                  plot_journals_analysis,
+                                                  plot_language_distribution,
+                                                  plot_open_access_distribution,
+                                                  plot_countries_distribution)
         import matplotlib.pyplot as plt
 
         logger.info("Starting data visualization...")
@@ -453,16 +458,11 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
         if analysis_type in [None, 'areas']:
             logger.info("Generating areas analysis...")
 
-            # Original bar chart (using expanded data)
+            # Bar chart by area (using expanded data)
             filename_area_stats = count_articles_by_groups(articles_data_expanded, 'area', 'filename')
             fig6 = plot_author_categories(filename_area_stats, top_n=20, y_name='Areas', group='Research Group')
             fig6.savefig(figures_path / "articles_by_group_and_area_bars.pdf", format="pdf")
             logger.info("✅ Saved: articles_by_group_and_area_bars.pdf")
-
-            # New grouped bar chart (using expanded data)
-            fig6_grouped = plot_sankey_area_group(articles_data_expanded, area_col='area', group_col='filename', top_n=10)
-            fig6_grouped.savefig(figures_path / "articles_by_group_and_area.pdf", format="pdf")
-            logger.info("✅ Saved: articles_by_group_and_area.pdf")
 
             # Generate area stats report
             filename_area_stats.index.name = 'area'
@@ -479,10 +479,15 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
         if analysis_type in [None, 'gran_areas']:
             logger.info("Generating grand areas analysis...")
 
-            # New Heatmap (using expanded data)
+            # Heatmap by gran area and group (using expanded data)
             fig5 = plot_heatmap_granarea_group(articles_data_expanded, granarea_col='gran_area', group_col='filename')
             fig5.savefig(figures_path / "articles_by_group_and_gran_area.pdf", format="pdf")
             logger.info("✅ Saved: articles_by_group_and_gran_area.pdf (Heatmap)")
+            
+            # Treemap by gran area (using non-expanded data - one row per article)
+            fig5_treemap = plot_treemap_granarea(articles_data, granarea_col='gran_area')
+            fig5_treemap.savefig(figures_path / "articles_by_gran_area_treemap.pdf", format="pdf")
+            logger.info("✅ Saved: articles_by_gran_area_treemap.pdf (Treemap)")
 
             # Generate gran area stats report
             granarea_stats = articles_data_expanded.groupby(['gran_area', 'filename']).size().reset_index(name='count')
@@ -527,15 +532,17 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
             metrics_to_consolidate = [
                 'openalex_id', 'openalex_title', 'cited_by_count', 'fwci',
                 'referenced_works_count', 'is_oa', 'oa_status', 'concepts',
-                'publication_year_openalex', 'title_similarity', 'openalex_doi'
+                'publication_year_openalex', 'title_similarity', 'openalex_doi',
+                'openalex_authors', 'openalex_institutions', 'openalex_countries',
+                'language', 'oa_url', 'any_repository_has_fulltext', 'citation_apa_openalex'
             ]
-            
+
             # Remove any duplicate columns that might have been created
-            cols_to_drop = [col for col in articles_with_citations.columns 
+            cols_to_drop = [col for col in articles_with_citations.columns
                            if col.endswith('_title') and col.replace('_title', '') in metrics_to_consolidate]
             if cols_to_drop:
                 articles_with_citations = articles_with_citations.drop(columns=cols_to_drop)
-            
+
             # Rename doi_validation_status to data_source for clarity
             if 'doi_validation_status' in articles_with_citations.columns:
                 articles_with_citations = articles_with_citations.rename(
@@ -549,6 +556,21 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
                     'not_found': 'not_found',
                     'error': 'not_found'
                 })
+
+            # Consolidate citation_apa: prioritize OpenAlex citation over original
+            if 'citation_apa' in articles_with_citations.columns and 'citation_apa_openalex' in articles_with_citations.columns:
+                # Use OpenAlex citation if available, otherwise keep original
+                articles_with_citations['citation_apa'] = articles_with_citations['citation_apa_openalex'].fillna(
+                    articles_with_citations['citation_apa']
+                )
+                # Drop the OpenAlex-specific column to avoid confusion
+                articles_with_citations = articles_with_citations.drop(columns=['citation_apa_openalex'])
+                logger.info("✓ Consolidated citation_apa column (prioritizing OpenAlex data)")
+            elif 'citation_apa_openalex' in articles_with_citations.columns:
+                # If no original citation_apa, rename OpenAlex version
+                articles_with_citations = articles_with_citations.rename(
+                    columns={'citation_apa_openalex': 'citation_apa'}
+                )
             
             articles_with_citations.to_csv(tables_path / "articles_with_citations.csv", index=False)
             logger.info("✅ Saved: articles_with_citations.csv")
@@ -673,6 +695,84 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
                 logger.info("✅ Saved: top_authors_by_2yr_citedness.pdf")
             else:
                 logger.warning("No 2yr_mean_citedness data could be retrieved from OpenAlex; skipping 2yr citedness plot.")
+            
+            # Journals analysis (articles and citations per journal)
+            if 'journal' in articles_with_citations.columns and 'cited_by_count' in articles_with_citations.columns:
+                fig10 = plot_journals_analysis(articles_with_citations, journal_col='journal', 
+                                              citations_col='cited_by_count', top_n=20)
+                fig10.savefig(figures_path / "top_journals_articles_citations.pdf", format="pdf")
+                logger.info("✅ Saved: top_journals_articles_citations.pdf")
+                
+                # Generate journal stats report
+                journal_stats = articles_with_citations.groupby('journal').agg({
+                    'cited_by_count': ['count', 'sum', 'mean']
+                }).reset_index()
+                journal_stats.columns = ['journal', 'num_articles', 'total_citations', 'avg_citations_per_article']
+                journal_stats = journal_stats.sort_values('total_citations', ascending=False)
+                journal_stats.to_csv(reports_path / 'journal_bibliometrics.csv', index=False)
+                logger.info("✅ Saved: reports/journal_bibliometrics.csv")
+            else:
+                logger.warning("Journal or citation data not available; skipping journals analysis.")
+            
+            # Language distribution
+            if 'language' in articles_with_citations.columns:
+                fig11 = plot_language_distribution(articles_with_citations, language_col='language')
+                fig11.savefig(figures_path / "articles_by_language.pdf", format="pdf")
+                logger.info("✅ Saved: articles_by_language.pdf")
+            else:
+                logger.warning("Language data not available; skipping language distribution plot.")
+            
+            # Open Access distribution
+            if 'is_oa' in articles_with_citations.columns:
+                fig12 = plot_open_access_distribution(articles_with_citations, oa_col='is_oa')
+                fig12.savefig(figures_path / "articles_by_open_access.pdf", format="pdf")
+                logger.info("✅ Saved: articles_by_open_access.pdf")
+                
+                # OA status breakdown report
+                if 'oa_status' in articles_with_citations.columns:
+                    oa_status_counts = articles_with_citations['oa_status'].value_counts().reset_index()
+                    oa_status_counts.columns = ['oa_status', 'count']
+                    oa_status_counts.to_csv(reports_path / 'open_access_status.csv', index=False)
+                    logger.info("✅ Saved: reports/open_access_status.csv")
+            else:
+                logger.warning("Open Access data not available; skipping OA distribution plot.")
+            
+            # Countries distribution
+            if 'openalex_countries' in articles_with_citations.columns:
+                fig13 = plot_countries_distribution(articles_with_citations, countries_col='openalex_countries', top_n=15)
+                fig13.savefig(figures_path / "articles_by_country.pdf", format="pdf")
+                logger.info("✅ Saved: articles_by_country.pdf")
+                
+                # Generate countries report
+                all_countries = []
+                for countries_str in articles_with_citations['openalex_countries'].dropna():
+                    if countries_str:
+                        countries_list = [c.strip() for c in str(countries_str).split(';')]
+                        all_countries.extend(countries_list)
+                
+                if all_countries:
+                    country_counts = pd.Series(all_countries).value_counts().reset_index()
+                    country_counts.columns = ['country_code', 'num_articles']
+                    country_counts.to_csv(reports_path / 'countries_distribution.csv', index=False)
+                    logger.info("✅ Saved: reports/countries_distribution.csv")
+            else:
+                logger.warning("Country data not available; skipping countries distribution plot.")
+            
+            # Institutions report
+            if 'openalex_institutions' in articles_with_citations.columns:
+                all_institutions = []
+                for institutions_str in articles_with_citations['openalex_institutions'].dropna():
+                    if institutions_str:
+                        institutions_list = [i.strip() for i in str(institutions_str).split(';')]
+                        all_institutions.extend(institutions_list)
+                
+                if all_institutions:
+                    institution_counts = pd.Series(all_institutions).value_counts().reset_index()
+                    institution_counts.columns = ['institution', 'num_articles']
+                    institution_counts.to_csv(reports_path / 'institutions_distribution.csv', index=False)
+                    logger.info("✅ Saved: reports/institutions_distribution.csv")
+            else:
+                logger.warning("Institution data not available; skipping institutions report.")
 
         logger.info("Visualization completed successfully")
         plt.close('all')
