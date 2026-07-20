@@ -306,7 +306,7 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
     """Step 3: Generate results
 
     Parameters:
-    analysis_type (str): 'authors', 'areas', 'gran_areas', 'timeline', 'bibliometrics', or None for all
+    analysis_type (str): 'authors', 'areas', 'gran_areas', 'timeline', 'bibliometrics', 'members', or None for all
     mailto (str): Optional email used for OpenAlex's polite pool (bibliometrics only)
     affiliation (str): Optional institution name to disambiguate authors (bibliometrics only)
     api_key (str): Optional OpenAlex API key for higher rate limits (bibliometrics only)
@@ -320,6 +320,7 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
         from analysis.bibliometrics import (enrich_with_citations,
                                             enrich_authors_with_metrics,
                                             build_author_summary)
+        from analysis.get_members_year import generate_members_report
         from visualization.visualize_data import (plot_articles_by_year_category,
                                                   plot_author_categories,
                                                   plot_top_authors_by_h_index,
@@ -332,6 +333,7 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
                                                   plot_open_access_distribution,
                                                   plot_countries_distribution)
         import matplotlib.pyplot as plt
+        import glob
 
         logger.info("Starting data visualization...")
         tables_path = PATHS['RESULTS'] / 'tables'
@@ -845,6 +847,37 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
             else:
                 logger.warning("Year column not available; skipping last 5 years analysis.")
 
+        # Members Analysis (research group members over time)
+        if analysis_type in [None, 'members']:
+            logger.info("Generating members analysis...")
+
+            # Look for member HTML files in processed data
+            data_blocks_path = PATHS['DATA'] / 'processed' / 'data_blocks_gruplac'
+
+            if data_blocks_path.exists():
+                integrantes_files = list(data_blocks_path.glob("*_integrantes.html"))
+
+                if integrantes_files:
+                    logger.info(f"Found {len(integrantes_files)} member files to process")
+
+                    for archivo in integrantes_files:
+                        # Extract group name from filename
+                        nombre_archivo = archivo.name
+                        if "_integrantes.html" in nombre_archivo:
+                            group_name = nombre_archivo.replace("_integrantes.html", "")
+
+                            try:
+                                logger.info(f"Processing members for group: {group_name}")
+                                generate_members_report(str(archivo), group_name, carpeta_destino=str(figures_path))
+                                logger.info(f"✅ Generated: {group_name}_members_last_10_years.pdf")
+                                logger.info(f"✅ Generated: {group_name}_members_last_5_years.pdf")
+                            except Exception as e:
+                                logger.error(f"Failed to process members for group {group_name}: {str(e)}")
+                else:
+                    logger.warning(f"No *_integrantes.html files found in {data_blocks_path}")
+            else:
+                logger.warning(f"Data blocks path not found: {data_blocks_path}. Run --process-data first.")
+
         logger.info("Visualization completed successfully")
         plt.close('all')
 
@@ -1107,10 +1140,11 @@ Examples:
     analysis_group = parser.add_argument_group('Analysis and Visualization')
     analysis_group.add_argument(
         '--analysis',
-        choices=['timeline', 'authors', 'areas', 'gran_areas', 'bibliometrics', 'all'],
-        help=('Generate specific analysis/visualizations. "bibliometrics" deduplicates '
-             'articles by DOI and queries OpenAlex for citation counts and author '
-             'h-index (not included when using "all", request it explicitly).')
+        choices=['timeline', 'authors', 'areas', 'gran_areas', 'members', 'bibliometrics', 'all'],
+        help=('Generate specific analysis/visualizations. "members" generates research '
+             'group member evolution graphs. "bibliometrics" deduplicates articles by DOI '
+             'and queries OpenAlex for citation counts and author h-index (not included '
+             'when using "all", request it explicitly).')
     )
     analysis_group.add_argument(
         '--email',

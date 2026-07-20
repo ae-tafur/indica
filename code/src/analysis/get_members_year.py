@@ -6,14 +6,20 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from collections import defaultdict
 
-def generar_reporte_integrantes(archivo, nombre_grupo):
+def generate_members_report(archivo, nombre_grupo, carpeta_destino=None):
     """
     Genera un reporte de integrantes a partir de un archivo de texto.
+
+    Parameters:
+    archivo (str): Path to the HTML file with member data
+    nombre_grupo (str): Name of the research group
+    carpeta_destino (str): Optional destination folder for reports. If None, calculates from archivo path.
     """
 
-    # Carpeta destino: 'results' al mismo nivel que 'data'
-    carpeta_data = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(archivo))))  # path_folder padre de 'data'
-    carpeta_destino = os.path.join(carpeta_data, "results")
+    # Carpeta destino: 'results/figures' al mismo nivel que 'data'
+    if carpeta_destino is None:
+        carpeta_data = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(archivo))))  # path_folder padre de 'data'
+        carpeta_destino = os.path.join(carpeta_data, "results", "figures")
     os.makedirs(carpeta_destino, exist_ok=True)
 
     # Leer líneas del archivo
@@ -233,6 +239,6 @@ for ruta_archivo in archivos:
         nombre_grupo = nombre_archivo.replace("_integrantes.html", "")
         
         print(f"\n🔍 Procesando grupo: {nombre_grupo}")
-        generar_reporte_integrantes(ruta_archivo, nombre_grupo)
+        generate_members_report(ruta_archivo, nombre_grupo)
     else:
         print(f"⚠️ Archivo con nombre inesperado: {nombre_archivo}")
