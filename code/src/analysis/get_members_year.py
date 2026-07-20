@@ -35,8 +35,8 @@ def generar_reporte_integrantes(archivo, nombre_grupo):
         print("No se detectaron años válidos.")
         return
 
-    # Usar el año actual para usar como año_fin en los "Actual"
-    anio_max = datetime.datetime.now().year
+    # Usar el año actual (2026) para los casos marcados como "Actual"
+    anio_actual = datetime.datetime.now().year
 
     # Paso 2: construir la tabla resumen
     datos = []
@@ -50,14 +50,14 @@ def generar_reporte_integrantes(archivo, nombre_grupo):
         if match_rango:
             anio_inicio = int(match_rango.group(1))
             anio_fin = int(match_rango.group(3))
-            activo = "Sí" if anio_inicio <= anio_max <= anio_fin else "No"
+            activo = "Sí" if anio_inicio <= anio_actual <= anio_fin else "No"
         elif match_actual:
             anio_inicio = int(match_actual.group(1))
-            anio_fin = anio_max
+            anio_fin = anio_actual
             activo = "Sí"
         elif match_solo_actual:
             anio_inicio = "Desconocido"
-            anio_fin = anio_max
+            anio_fin = anio_actual
             activo = "Sí"
         else:
             anio_inicio = "No detectado"
@@ -69,7 +69,7 @@ def generar_reporte_integrantes(archivo, nombre_grupo):
             "Texto": linea,
             "Año inicio": anio_inicio,
             "Año fin": anio_fin,
-            "Activo en último año ({})".format(anio_max): activo
+            "Activo en último año ({})".format(anio_actual): activo
         })
 
     # Crear DataFrame
@@ -80,7 +80,7 @@ def generar_reporte_integrantes(archivo, nombre_grupo):
     # df.to_csv(csv_out, index=False)
 
     # Mostrar resumen de activos en último año
-    activos = df[df[f"Activo en último año ({anio_max})"] == "Sí"]
+    activos = df[df[f"Activo en último año ({anio_actual})"] == "Sí"]
     print(activos)
     print(f"\nTotal de integrantes activos en {nombre_grupo}: {len(activos)}")
 
@@ -100,17 +100,22 @@ def generar_reporte_integrantes(archivo, nombre_grupo):
     valores = [conteo_anios[a] for a in anios]
 
     # Detectar el último año presente en los datos
-    anio_max = max(anios)
+    anio_max_datos = max(anios)
 
-    # Colores del gráfico
-    colores = ['#515151'] * len(anios)
-    colores[anios.index(anio_max)] = '#019904' # Último año en verde
+    # Filtrar últimos 10 años para el gráfico principal
+    anio_min_10 = anio_max_datos - 9
+    anios_10 = [a for a in anios if a >= anio_min_10]
+    valores_10 = [conteo_anios[a] for a in anios_10]
 
-    # ---------------- Gráfico completo ----------------
+    # Colores del gráfico (último año en verde)
+    colores_10 = ['#515151'] * len(anios_10)
+    colores_10[-1] = '#019904'
+
+    # ---------------- Gráfico últimos 10 años ----------------
 
     # Crear gráfico
     plt.figure(figsize=(12, 6))
-    bars = plt.bar(anios, valores, color=colores)
+    bars = plt.bar(anios_10, valores_10, color=colores_10)
 
     # Añadir etiquetas de valor a cada barra
     for bar in bars:
@@ -122,14 +127,14 @@ def generar_reporte_integrantes(archivo, nombre_grupo):
     plt.subplots_adjust(bottom = 0.3)
 
     # Anotación con flecha curva a la última barra (ligeramente a la izquierda)
-    ultimo_x = anios[-1]
+    ultimo_x = anios_10[-1]
     ancho_barra = 0.8  # Valor por defecto de matplotlib
     desplazamiento = ancho_barra * 0.4  # Ajusta este valor si quieres más/menos desplazamiento
 
     plt.annotate(
         "Integrantes\nactivos",
-        xy = (ultimo_x - desplazamiento, valores[-1]),
-        xytext = (ultimo_x, valores[-1] + max(valores) * 0.075),
+        xy = (ultimo_x - desplazamiento, valores_10[-1]),
+        xytext = (ultimo_x, valores_10[-1] + max(valores_10) * 0.075),
         arrowprops = dict(
             arrowstyle = '->',
             color = "#000000",
@@ -144,7 +149,7 @@ def generar_reporte_integrantes(archivo, nombre_grupo):
     # Personalización de ejes y título
     plt.xlabel("Año", fontweight='bold')
     plt.ylabel("Número de integrantes activos", fontweight='bold')
-    plt.title(f"{nombre_grupo}: Integrantes por año")
+    plt.title(f"{nombre_grupo}: Integrantes por año (últimos 10 años)")
     plt.figtext(
         0.01,  # Posición horizontal (izquierda)
         0.01,  # Posición vertical (debajo del gráfico)
@@ -153,23 +158,24 @@ def generar_reporte_integrantes(archivo, nombre_grupo):
         ha='left',
         fontsize=9,
     )
-    plt.xticks(anios)
+    plt.xticks(anios_10)
     plt.tight_layout()
 
     # Guardar como PDF (vectorial)
-    plt.savefig(os.path.join(carpeta_destino, f"{nombre_grupo}_integrantes_hasta{anio_max}.pdf"), format="pdf")
+    plt.savefig(os.path.join(carpeta_destino, f"{nombre_grupo}_members_last_10_years.pdf"), format="pdf")
 
     # ---------------- Gráfico últimos 5 años ----------------
 
     # Filtrar últimos 5 años
-    ultimos_anios = anios[-5:]
-    ultimos_valores = [conteo_anios[a] for a in ultimos_anios]
-    ultimos_colores = ['#515151'] * 5
-    ultimos_colores[-1] = '#019904'  # Último año automáticamente en verde
+    anio_min_5 = anio_max_datos - 4
+    anios_5 = [a for a in anios if a >= anio_min_5]
+    valores_5 = [conteo_anios[a] for a in anios_5]
+    colores_5 = ['#515151'] * len(anios_5)
+    colores_5[-1] = '#019904'  # Último año automáticamente en verde
 
     # Crear gráfico
     plt.figure(figsize=(10, 5))
-    bars5 = plt.bar(ultimos_anios, ultimos_valores, color=ultimos_colores)
+    bars5 = plt.bar(anios_5, valores_5, color=colores_5)
 
     # Añadir etiquetas de valor a cada barra
     for bar in bars5:
@@ -180,7 +186,7 @@ def generar_reporte_integrantes(archivo, nombre_grupo):
     # Ajuste para dejar espacio en la parte inferior
     plt.subplots_adjust(bottom = 0.3)
 
-    # Añadir etiquetas de valor a cada barra
+    # Personalización de ejes y título
     plt.xlabel("Año", fontweight='bold')
     plt.ylabel("Número de integrantes activos", fontweight='bold')
     plt.title(f"{nombre_grupo}: Últimos 5 años de vinculación")
@@ -192,16 +198,16 @@ def generar_reporte_integrantes(archivo, nombre_grupo):
         ha='left',
         fontsize=9,
     )
-    plt.xticks(ultimos_anios)
+    plt.xticks(anios_5)
     plt.tight_layout()
 
     # Guardar como PDF (vectorial)
-    plt.savefig(os.path.join(carpeta_destino, f"{nombre_grupo}_integrantes_ultimos5_hasta{anio_max}.pdf"), format="pdf")
+    plt.savefig(os.path.join(carpeta_destino, f"{nombre_grupo}_members_last_5_years.pdf"), format="pdf")
 
-    print(f"\n✅ Reporte generado para el grupo '{nombre_grupo}' hasta {anio_max}.")
+    print(f"\n✅ Reporte generado para el grupo '{nombre_grupo}' (datos hasta {anio_max_datos}).")
     # print(f" - {csv_out}")
-    print(f" - {nombre_grupo}_integrantes_hasta{anio_max}.pdf")
-    print(f" - {nombre_grupo}_ultimos5_hasta{anio_max}.pdf")
+    print(f" - {nombre_grupo}_members_last_10_years.pdf")
+    print(f" - {nombre_grupo}_members_last_5_years.pdf")
     print(f"Los archivos se guardaron en: {carpeta_destino}")
 
 # ---------------- Importar y procesar archivos de integrantes ----------------

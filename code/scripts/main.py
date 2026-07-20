@@ -774,6 +774,77 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
             else:
                 logger.warning("Institution data not available; skipping institutions report.")
 
+            # ============ Bibliometric Analysis for Last 5 Years ============
+            logger.info("Generating bibliometric analysis for last 5 years...")
+
+            # Filter articles from last 5 years
+            if 'year' in articles_with_citations.columns:
+                current_year = pd.to_numeric(articles_with_citations['year'], errors='coerce').max()
+                if pd.notna(current_year):
+                    last_5_years = articles_with_citations[
+                        pd.to_numeric(articles_with_citations['year'], errors='coerce') >= current_year - 4
+                    ]
+                    logger.info(f"Filtered last 5 years ({int(current_year)-4}-{int(current_year)}): {len(last_5_years)} articles")
+
+                    # Top cited articles (last 5 years)
+                    if 'cited_by_count' in last_5_years.columns and last_5_years['cited_by_count'].sum() > 0:
+                        top_cited_5y = last_5_years.nlargest(20, 'cited_by_count')[
+                            ['tittle', 'authors', 'year', 'journal', 'cited_by_count', 'doi']
+                        ].copy()
+                        top_cited_5y = top_cited_5y.reset_index(drop=True)
+                        top_cited_5y.index = top_cited_5y.index + 1
+                        top_cited_5y.to_csv(reports_path / 'top_cited_articles_last_5_years.csv')
+                        logger.info("✅ Saved: reports/top_cited_articles_last_5_years.csv")
+
+                    # Journals analysis (last 5 years)
+                    if 'journal' in last_5_years.columns and 'cited_by_count' in last_5_years.columns:
+                        fig10_5y = plot_journals_analysis(last_5_years, journal_col='journal',
+                                                         citations_col='cited_by_count', top_n=20)
+                        fig10_5y.savefig(figures_path / "top_journals_articles_citations_last_5_years.pdf", format="pdf")
+                        logger.info("✅ Saved: top_journals_articles_citations_last_5_years.pdf")
+
+                        journal_stats_5y = last_5_years.groupby('journal').agg({
+                            'cited_by_count': ['count', 'sum', 'mean']
+                        }).reset_index()
+                        journal_stats_5y.columns = ['journal', 'num_articles', 'total_citations', 'avg_citations_per_article']
+                        journal_stats_5y = journal_stats_5y.sort_values('total_citations', ascending=False)
+                        journal_stats_5y.to_csv(reports_path / 'journal_bibliometrics_last_5_years.csv', index=False)
+                        logger.info("✅ Saved: reports/journal_bibliometrics_last_5_years.csv")
+
+                    # Language distribution (last 5 years)
+                    if 'language' in last_5_years.columns:
+                        fig11_5y = plot_language_distribution(last_5_years, language_col='language')
+                        fig11_5y.savefig(figures_path / "articles_by_language_last_5_years.pdf", format="pdf")
+                        logger.info("✅ Saved: articles_by_language_last_5_years.pdf")
+
+                    # Open Access distribution (last 5 years)
+                    if 'is_oa' in last_5_years.columns:
+                        fig12_5y = plot_open_access_distribution(last_5_years, oa_col='is_oa')
+                        fig12_5y.savefig(figures_path / "articles_by_open_access_last_5_years.pdf", format="pdf")
+                        logger.info("✅ Saved: articles_by_open_access_last_5_years.pdf")
+
+                    # Countries distribution (last 5 years)
+                    if 'openalex_countries' in last_5_years.columns:
+                        fig13_5y = plot_countries_distribution(last_5_years, countries_col='openalex_countries', top_n=15)
+                        fig13_5y.savefig(figures_path / "articles_by_country_last_5_years.pdf", format="pdf")
+                        logger.info("✅ Saved: articles_by_country_last_5_years.pdf")
+
+                        all_countries_5y = []
+                        for countries_str in last_5_years['openalex_countries'].dropna():
+                            if countries_str:
+                                countries_list = [c.strip() for c in str(countries_str).split(';')]
+                                all_countries_5y.extend(countries_list)
+
+                        if all_countries_5y:
+                            country_counts_5y = pd.Series(all_countries_5y).value_counts().reset_index()
+                            country_counts_5y.columns = ['country_code', 'num_articles']
+                            country_counts_5y.to_csv(reports_path / 'countries_distribution_last_5_years.csv', index=False)
+                            logger.info("✅ Saved: reports/countries_distribution_last_5_years.csv")
+                else:
+                    logger.warning("Could not determine current year; skipping last 5 years analysis.")
+            else:
+                logger.warning("Year column not available; skipping last 5 years analysis.")
+
         logger.info("Visualization completed successfully")
         plt.close('all')
 

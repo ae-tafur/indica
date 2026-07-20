@@ -348,24 +348,29 @@ def plot_treemap_granarea(df, granarea_col='gran_area', value_col=None):
         ax.text(0.5, 0.5, 'No data available', ha='center', va='center')
         return fig
     
-    # Prepare labels with counts and percentages
+    # Prepare labels with counts and percentages, adding line breaks for long text
     total = area_counts.sum()
-    labels = [f"{area}\n{count} ({count/total*100:.1f}%)" 
-             for area, count in area_counts.items()]
-    
+    labels = []
+    for area, count in area_counts.items():
+        # Add line breaks for long area names (every 30 characters approximately)
+        area_wrapped = '\n'.join([area[i:i+30] for i in range(0, len(area), 30)])
+        labels.append(f"{area_wrapped}\n{count} ({count/total*100:.1f}%)")
+
     # Create figure
     fig, ax = plt.subplots(figsize=(14, 10))
-    
+
     # Get colors
     n_areas = len(area_counts)
     colors = get_categorical_colors(n_areas)
-    
-    # Create treemap
-    squarify.plot(sizes=area_counts.values, 
-                 label=labels, 
+
+    # Create treemap with white borders
+    squarify.plot(sizes=area_counts.values,
+                 label=labels,
                  color=colors,
                  alpha=0.8,
-                 text_kwargs={'fontsize': 10, 'weight': 'bold'},
+                 text_kwargs={'fontsize': 9, 'weight': 'bold', 'wrap': True},
+                 edgecolor='white',
+                 linewidth=3,
                  ax=ax)
     
     ax.set_title('Articles Distribution by Gran Area', 
@@ -521,6 +526,72 @@ def plot_countries_distribution(df, countries_col='openalex_countries', top_n=15
     Returns:
     matplotlib.figure.Figure: The plot figure
     """
+    # Country code to name mapping (most common countries)
+    country_names = {
+        'CO': 'Colombia',
+        'US': 'United States',
+        'BR': 'Brazil',
+        'ES': 'Spain',
+        'MX': 'Mexico',
+        'AR': 'Argentina',
+        'GB': 'United Kingdom',
+        'CL': 'Chile',
+        'PE': 'Peru',
+        'FR': 'France',
+        'DE': 'Germany',
+        'IT': 'Italy',
+        'CA': 'Canada',
+        'AU': 'Australia',
+        'CN': 'China',
+        'JP': 'Japan',
+        'IN': 'India',
+        'EC': 'Ecuador',
+        'VE': 'Venezuela',
+        'UY': 'Uruguay',
+        'CR': 'Costa Rica',
+        'PA': 'Panama',
+        'NL': 'Netherlands',
+        'BE': 'Belgium',
+        'CH': 'Switzerland',
+        'AT': 'Austria',
+        'SE': 'Sweden',
+        'NO': 'Norway',
+        'DK': 'Denmark',
+        'FI': 'Finland',
+        'PT': 'Portugal',
+        'PL': 'Poland',
+        'RU': 'Russia',
+        'ZA': 'South Africa',
+        'KR': 'South Korea',
+        'NZ': 'New Zealand',
+        'IE': 'Ireland',
+        'CZ': 'Czech Republic',
+        'HU': 'Hungary',
+        'RO': 'Romania',
+        'GR': 'Greece',
+        'TR': 'Turkey',
+        'IL': 'Israel',
+        'EG': 'Egypt',
+        'NG': 'Nigeria',
+        'KE': 'Kenya',
+        'TH': 'Thailand',
+        'VN': 'Vietnam',
+        'PH': 'Philippines',
+        'MY': 'Malaysia',
+        'SG': 'Singapore',
+        'ID': 'Indonesia',
+        'PK': 'Pakistan',
+        'BD': 'Bangladesh',
+        'CU': 'Cuba',
+        'DO': 'Dominican Republic',
+        'GT': 'Guatemala',
+        'HN': 'Honduras',
+        'SV': 'El Salvador',
+        'NI': 'Nicaragua',
+        'BO': 'Bolivia',
+        'PY': 'Paraguay',
+    }
+
     # Prepare data - expand semicolon-separated countries
     all_countries = []
     for countries_str in df[countries_col].dropna():
@@ -535,7 +606,13 @@ def plot_countries_distribution(df, countries_col='openalex_countries', top_n=15
 
     # Count and get top countries
     import pandas as pd
-    country_counts = pd.Series(all_countries).value_counts().head(top_n).iloc[::-1]
+    country_counts = pd.Series(all_countries).value_counts().head(top_n)
+
+    # Map country codes to full names
+    country_counts.index = [country_names.get(code, code) for code in country_counts.index]
+
+    # Reverse for horizontal plot (smallest to largest)
+    country_counts = country_counts.iloc[::-1]
 
     # Create figure
     fig, ax = plt.subplots(figsize=(10, 8))
