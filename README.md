@@ -29,24 +29,37 @@ información de **GrupLAC**, **Publindex** y **Scopus**.
   Publindex, tanto en detalle como resumido por grupo de investigación, para
   facilitar solicitar la corrección a cada autor/grupo y servir de guía antes
   de escribir informes o hacer análisis bibliométricos.
-- 📚 **Análisis bibliométrico** (vía [OpenAlex](https://openalex.org), API gratuita
-  sin necesidad de clave):
-  - Número de citas por artículo y fuentes que lo citan
-  - Índice H, i10-index, número de obras y citas totales por autor
+- 📚 **Análisis bibliométrico** (vía [OpenAlex](https://openalex.org), API gratuita):
+  - ✅ Búsqueda prioritaria por **ORCID** (más precisa) con fallback a nombre
+  - ✅ Validación de DOI con comparación de títulos (detecta DOIs que apuntan a revistas en lugar de artículos)
+  - ✅ Búsqueda automática por título cuando DOI falta o es inválido
+  - ✅ Número de citas, FWCI, autores, instituciones, países, idioma, acceso abierto
+  - ✅ Índice H, i10-index, 2yr mean citedness por autor
+  - ✅ Generación automática de citas APA desde OpenAlex
+  - ✅ Análisis general + análisis últimos 5 años (sin hacer nuevas consultas)
+- 👥 **Análisis de integrantes**: Evolución de miembros activos por grupo de investigación
+  - Gráficos de últimos 10 años y últimos 5 años
+  - Identificación automática de miembros activos (maneja casos "Actual" en GrupLAC)
 - 📊 **Generación de análisis y visualizaciones** (gráficos estáticos en PDF):
   - Línea de tiempo de artículos por año y categoría (histórico y últimos 10 años)
-  - Artículos por autor
+  - Artículos por autor (con filtro por departamento)
   - Artículos por grupo y área de conocimiento
-  - Artículos por grupo y gran área de conocimiento
-  - Top artículos más citados y top autores por índice H
+  - Artículos por grupo y gran área (heatmap + treemap con bordes blancos)
+  - Análisis de revistas (artículos + citas por revista)
+  - Distribución por idioma (donut chart)
+  - Distribución por acceso abierto (donut chart con colores institucionales)
+  - Distribución por países (con nombres completos, no códigos)
+  - Top artículos más citados y top autores por índice H / 2yr citedness
 
 ## Requisitos
 
 - Python 3.9+
 - pandas
 - matplotlib
+- seaborn
 - requests
 - openpyxl
+- squarify
 - pdfplumber / camelot (o la librería usada en `extract_table.py` para leer PDFs)
 
 ## Instalación
@@ -208,6 +221,9 @@ python code/scripts/main.py --analysis areas
 
 # Artículos por grupo y gran área de conocimiento
 python code/scripts/main.py --analysis gran_areas
+
+# Evolución de integrantes por grupo de investigación
+python code/scripts/main.py --analysis members
 ```
 
 ### Análisis bibliométrico (citas + índice H)
@@ -218,20 +234,54 @@ El análisis `bibliometrics` **no se incluye** dentro de `--analysis all` ni de
 de artículos y autores. Debe solicitarse explícitamente:
 
 ```bash
-# Deduplicar artículos por DOI y obtener citas + índice H de los autores
+# Análisis bibliométrico básico
 python code/scripts/main.py --analysis bibliometrics
 
-# Recomendado: usar tu correo para la "polite pool" de OpenAlex (respuestas más
-# rápidas y estables) y el nombre de la institución para desambiguar autores
+# Recomendado: con API key de OpenAlex (100k requests/día vs 100/día)
 python code/scripts/main.py --analysis bibliometrics \
     --email tu_correo@ejemplo.com \
-    --affiliation "Universidad X"
+    --affiliation "Universidad X" \
+    --api-key TU_API_KEY_AQUI
 ```
 
-Este análisis:
+**Características del análisis bibliométrico:**
 
-1. Utiliza la **tabla consolidada y deduplicada por DOI**
-   (`results/tables/articles_consolidated.csv`, generada por `--process-data`),
+1. **Búsqueda por ORCID prioritaria**: Si los autores tienen ORCID en
+   `database/authors_dpto_micro.csv`, se usa para búsqueda más precisa
+2. **Validación de DOI con títulos**: Detecta cuando un DOI apunta a una revista
+   en lugar del artículo específico (ej: doi.org/10.17533/udea.rccp)
+3. **Fallback automático a búsqueda por título**: Si DOI falta o es inválido
+4. **Datos recolectados por artículo**:
+   - Citas, FWCI, idioma, acceso abierto (OA), URL OA
+   - Autores, instituciones, países (de OpenAlex)
+   - Generación automática de cita APA
+5. **Métricas por autor**: h-index, i10-index, 2yr mean citedness
+6. **Análisis duplicado**: General + últimos 5 años (usando datos ya obtenidos)
+
+Este análisis utiliza la **tabla consolidada y deduplicada por DOI**
+   (`results/tables/articles_consolidated.csv`, generada por `--process-data`).
+
+**Reportes generados:**
+- Generales: `articles_with_citations.csv`, `author_summary_h_index.csv`
+- Últimos 5 años: `*_last_5_years.csv` y `*_last_5_years.pdf`
+- Búsqueda: `openalex_search_info.csv` (detalla método usado: DOI o título)
+
+### Análisis de integrantes
+
+Genera gráficos de evolución de miembros activos por grupo:
+
+```bash
+python code/scripts/main.py --analysis members
+```
+
+**Archivos generados:**
+- `{grupo}_members_last_10_years.pdf` — Últimos 10 años
+- `{grupo}_members_last_5_years.pdf` — Últimos 5 años
+
+**Características:**
+- ✅ Detecta automáticamente el año actual (2026)
+- ✅ Maneja casos "Actual" en GrupLAC correctamente
+- ✅ Identifica miembros activos con flecha verde
 
 ### Herramientas de análisis de duplicados
 
@@ -319,12 +369,14 @@ python code/scripts/main.py --all --verbose
 |------------------------|----------------------------------------------------------------|--------------------------------------------------------------------------|
 | `--all`                | flag                                                           | Ejecuta el pipeline completo: bases de datos + procesamiento + análisis  |
 | `--database`           | `homologation`, `publindex`, `scopus`, `all`                   | Crea/actualiza una base de datos específica (o todas)                    |
+| `--force-reprocess`    | flag                                                           | Fuerza reprocesamiento de todos los archivos (con `--database homologation`) |
 | `--process-data`       | flag                                                           | Descarga y procesa los datos de GrupLAC, enriquece los artículos         |
 | `--analyze-duplicates` | flag                                                           | Analiza el reporte de duplicados y genera estadísticas                   |
 | `--fix-duplicates`     | flag                                                           | Aplica deduplicación agresiva para corregir duplicados residuales        |
-| `--analysis`           | `timeline`, `authors`, `areas`, `gran_areas`, `bibliometrics`, `all` | Genera un análisis/visualización específico. `bibliometrics` **no** se incluye con `all` (debe solicitarse explícitamente) |
+| `--analysis`           | `timeline`, `authors`, `areas`, `gran_areas`, `members`, `bibliometrics`, `all` | Genera un análisis/visualización específico. `bibliometrics` **no** se incluye con `all` (debe solicitarse explícitamente) |
 | `--email`              | texto (correo)                                                 | Correo para la "polite pool" de OpenAlex (solo `--analysis bibliometrics`) |
 | `--affiliation`        | texto (institución)                                            | Institución para desambiguar autores en OpenAlex (solo `--analysis bibliometrics`) |
+| `--api-key`            | texto (API key)                                                | API key de OpenAlex para 100k requests/día (solo `--analysis bibliometrics`) |
 | `--verbose`, `-v`      | flag                                                           | Activa mensajes de log más detallados                                    |
 
 Si se ejecuta el script sin ningún parámetro, se muestra la ayuda (`--help`).
@@ -441,14 +493,13 @@ Bases de datos auxiliares (curación manual y homologación de áreas):
   `--process-data`: unión de todos los grupos, deduplicada por DOI. Es la que
   usan por defecto todos los análisis (`--analysis ...`).
 - `articles_with_citations.csv` — (solo con `--analysis bibliometrics`) tabla
-  consolidada + número de citas, estado de acceso abierto y conceptos/áreas
-  temáticas (OpenAlex).
-- `authors_with_bibliometric_metrics.csv` — (solo con `--analysis bibliometrics`)
-  una fila por autor y artículo, con el orden del autor en la firma
-  (`orden_autor`) y sus métricas de OpenAlex.
+  consolidada + citas, FWCI, autores OpenAlex, instituciones, países, idioma,
+  acceso abierto, URL OA, cita APA generada automáticamente
 - `author_summary_h_index.csv` — (solo con `--analysis bibliometrics`) una
-  fila por autor con índice H, i10-index, número de obras y citas totales,
-  ordenado de mayor a menor índice H.
+  fila por autor con h-index, i10-index, 2yr mean citedness, ORCID, obras
+  totales y citas, ordenado de mayor a menor h-index
+- `openalex_search_info.csv` — (solo con `--analysis bibliometrics`) reporte
+  de búsqueda: método usado (DOI o título), similitud, estado de validación
 
 ### `results/reports/` — Reportes de calidad de la información
 
@@ -466,13 +517,30 @@ consolidada:
 
 ### `results/figures/` — Gráficos (PDF)
 
-- `articles_by_year_all_groups.pdf` — Artículos por año y categoría Publindex (histórico)
-- `articles_by_year_all_groups_last_10_years.pdf` — Artículos por año (últimos 10 años)
-- `articles_by_author_all_groups.pdf` — Distribución de artículos por autor
-- `articles_by_group_and_area.pdf` — Distribución de artículos por grupo y área
-- `articles_by_group_and_gran_area.pdf` — Distribución de artículos por grupo y gran área
-- `top_cited_articles.pdf` — Top 20 artículos más citados (solo con `--analysis bibliometrics`)
-- `top_authors_by_h_index.pdf` — Top 20 autores por índice H (solo con `--analysis bibliometrics`)
+**Análisis temporal:**
+- `articles_by_year_all_groups.pdf` — Histórico completo por año y categoría
+- `articles_by_year_all_groups_last_10_years.pdf` — Últimos 10 años
+
+**Análisis por autor y grupo:**
+- `articles_by_author_all_groups.pdf` — Distribución por autor (filtrado por departamento)
+- `articles_by_group_and_area_bars.pdf` — Por grupo y área (barras horizontales)
+- `articles_by_group_and_gran_area.pdf` — Heatmap por grupo y gran área
+- `articles_by_gran_area_treemap.pdf` — Treemap por gran área (con bordes blancos)
+
+**Integrantes (con `--analysis members`):**
+- `{grupo}_members_last_10_years.pdf` — Evolución últimos 10 años
+- `{grupo}_members_last_5_years.pdf` — Evolución últimos 5 años
+
+**Análisis bibliométrico (con `--analysis bibliometrics`):**
+- `top_authors_by_h_index.pdf` — Top 20 autores por h-index
+- `top_authors_by_2yr_citedness.pdf` — Top 20 por 2yr mean citedness
+- `top_journals_articles_citations.pdf` — Revistas (artículos + citas)
+- `articles_by_language.pdf` — Distribución por idioma (donut)
+- `articles_by_open_access.pdf` — Open Access vs Closed (donut, colores institucionales)
+- `articles_by_country.pdf` — Top 15 países (nombres completos)
+
+**Últimos 5 años (bibliometrics):**
+- `*_last_5_years.pdf` — Versión de cada gráfico para últimos 5 años
 
 
 ## Logging
@@ -503,13 +571,25 @@ revisa la URL vigente en la web de Elsevier/Scopus y actualízala en
 `create_databases()` dentro de `code/scripts/main.py`.
 
 **`--analysis bibliometrics` no encuentra citas o índice H para algunos artículos/autores**
-Esto ocurre cuando:
-- El artículo no tiene DOI o el DOI no está indexado en OpenAlex.
-- El nombre del autor es ambiguo (homónimos). Usa `--affiliation` con el nombre
-  de la institución para mejorar la desambiguación.
-- Se alcanzó un límite de tasa de la API. Usa `--email` para acceder a la
-  "polite pool" de OpenAlex, que tiene límites más altos y respuestas más
-  estables.
+
+El sistema implementa múltiples estrategias de búsqueda:
+
+1. **Para artículos**:
+   - Intenta búsqueda por DOI primero
+   - Valida que el DOI apunte al artículo correcto (no a la revista)
+   - Si falla, busca automáticamente por título
+   - Revisa `openalex_search_info.csv` para ver qué método se usó
+
+2. **Para autores**:
+   - Prioriza búsqueda por ORCID (si está en `database/authors_dpto_micro.csv`)
+   - Fallback a búsqueda por nombre + afiliación
+   - Usa `--affiliation "Universidad X"` para mejorar desambiguación
+
+3. **Rate limiting**:
+   - Sin API key: 100 requests/día
+   - Con API key: 100,000 requests/día
+   - Obtén tu key gratis en https://openalex.org/
+   - Usa `--email` y `--api-key` para mayor estabilidad
 
 **`articles_consolidated.csv` no existe / está desactualizado**
 Esta tabla se genera (o regenera) automáticamente cada vez que ejecutas
@@ -537,6 +617,39 @@ versión ya depurada por DOI y lista para análisis/reportes.
 ## Autores
 
 - Albert Tafur Rangel, Ph.D.
+
+## Novedades y mejoras recientes
+
+### Versión actual (2026)
+
+**Análisis bibliométrico mejorado:**
+- ✅ Búsqueda prioritaria por ORCID con fallback a nombre
+- ✅ Validación de DOI con similitud de títulos (threshold 0.7)
+- ✅ Búsqueda automática por título cuando DOI falla
+- ✅ Recolección de autores, instituciones, países de OpenAlex
+- ✅ Generación automática de citas APA
+- ✅ Análisis duplicado para últimos 5 años (sin consultas adicionales)
+- ✅ Soporte para API key de OpenAlex (100k requests/día)
+
+**Visualizaciones mejoradas:**
+- ✅ Donut charts para idioma y acceso abierto (antes: pie charts)
+- ✅ Colores institucionales en gráfico de Open Access (verde/rojo)
+- ✅ Treemap con bordes blancos para separar áreas del mismo color
+- ✅ Nombres completos de países (antes: códigos ISO)
+- ✅ Gráfico dual de revistas (artículos + citas)
+- ✅ Top autores por 2yr mean citedness
+
+**Análisis de integrantes:**
+- ✅ Integrado en `--analysis all` y `--analysis members`
+- ✅ Gráficos de últimos 10 años (antes: histórico completo)
+- ✅ Gráficos de últimos 5 años
+- ✅ Detección correcta del año actual (2026 para casos "Actual")
+- ✅ Guardado en `results/figures/` junto con otros análisis
+
+**Consolidación de datos:**
+- ✅ Columnas únicas para métricas (cited_by_count, FWCI)
+- ✅ Columna consolidada `citation_apa` (prioriza OpenAlex)
+- ✅ Campo `openalex_data_source` (indica método: DOI o título)
 
 ## Soporte
 
