@@ -331,7 +331,8 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
                                                   plot_journals_analysis,
                                                   plot_language_distribution,
                                                   plot_open_access_distribution,
-                                                  plot_countries_distribution)
+                                                  plot_countries_distribution,
+                                                  plot_minciencias_category_distribution)
         import matplotlib.pyplot as plt
         import glob
 
@@ -455,6 +456,69 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
                 author_category_stats.index.name = 'author'
                 author_category_stats.to_csv(reports_path / 'author_stats.csv')
                 logger.info("✅ Saved: reports/author_stats.csv")
+
+            # Generate authors analysis for last 5 and 10 years
+            logger.info("Generating authors analysis for last 5 and 10 years...")
+            if authors_dept_path.exists():
+                current_year = pd.to_numeric(articles_data['year'], errors='coerce').max()
+                if pd.notna(current_year):
+                    # Last 5 years
+                    articles_last_5y = articles_data[
+                        pd.to_numeric(articles_data['year'], errors='coerce') >= current_year - 4
+                    ]
+
+                    df_authors_5y, _ = process_authors_dataframe(articles_last_5y, year_column='year', authors_column='authors')
+                    df_authors_5y_filtered = df_authors_5y[df_authors_5y['author'].isin(dept_author_list)]
+
+                    if len(df_authors_5y_filtered) > 0:
+                        author_category_stats_5y = count_articles_by_groups(df_authors_5y_filtered, 'author', 'category_publindex')
+                        fig_authors_5y = plot_author_categories(author_category_stats_5y, y_name='Authors', group='Category')
+                        fig_authors_5y.savefig(figures_path / "articles_by_author_all_groups_last_5_years.pdf", format="pdf")
+                        logger.info("✅ Saved: articles_by_author_all_groups_last_5_years.pdf")
+
+                        # Generate author stats report for last 5 years
+                        author_category_stats_5y.index.name = 'author'
+                        author_category_stats_5y.to_csv(reports_path / 'author_stats_last_5_years.csv')
+                        logger.info("✅ Saved: reports/author_stats_last_5_years.csv")
+
+                    # Last 10 years
+                    articles_last_10y = articles_data[
+                        pd.to_numeric(articles_data['year'], errors='coerce') >= current_year - 9
+                    ]
+
+                    df_authors_10y, _ = process_authors_dataframe(articles_last_10y, year_column='year', authors_column='authors')
+                    df_authors_10y_filtered = df_authors_10y[df_authors_10y['author'].isin(dept_author_list)]
+
+                    if len(df_authors_10y_filtered) > 0:
+                        author_category_stats_10y = count_articles_by_groups(df_authors_10y_filtered, 'author', 'category_publindex')
+                        fig_authors_10y = plot_author_categories(author_category_stats_10y, y_name='Authors', group='Category')
+                        fig_authors_10y.savefig(figures_path / "articles_by_author_all_groups_last_10_years.pdf", format="pdf")
+                        logger.info("✅ Saved: articles_by_author_all_groups_last_10_years.pdf")
+
+                        # Generate author stats report for last 10 years
+                        author_category_stats_10y.index.name = 'author'
+                        author_category_stats_10y.to_csv(reports_path / 'author_stats_last_10_years.csv')
+                        logger.info("✅ Saved: reports/author_stats_last_10_years.csv")
+
+            # Minciencias category distribution
+            logger.info("Generating Minciencias category distribution...")
+            if authors_dept_path.exists():
+                authors_dept = pd.read_csv(authors_dept_path, encoding='utf-8-sig')
+
+                if 'Categoria_Minciencias' in authors_dept.columns:
+                    fig_minciencias = plot_minciencias_category_distribution(authors_dept, category_col='Categoria_Minciencias')
+                    fig_minciencias.savefig(figures_path / "authors_by_minciencias_category.pdf", format="pdf")
+                    logger.info("✅ Saved: authors_by_minciencias_category.pdf")
+
+                    # Generate category distribution report
+                    category_counts = authors_dept['Categoria_Minciencias'].value_counts().reset_index()
+                    category_counts.columns = ['categoria_minciencias', 'num_authors']
+                    category_counts.to_csv(reports_path / 'minciencias_category_distribution.csv', index=False)
+                    logger.info("✅ Saved: reports/minciencias_category_distribution.csv")
+                else:
+                    logger.warning("Column 'Categoria_Minciencias' not found in authors_dpto_micro.csv")
+            else:
+                logger.warning(f"Department authors file not found: {authors_dept_path}")
 
         # Areas Analysis
         if analysis_type in [None, 'areas']:
@@ -846,6 +910,55 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
                     logger.warning("Could not determine current year; skipping last 5 years analysis.")
             else:
                 logger.warning("Year column not available; skipping last 5 years analysis.")
+
+            # ============ Additional Last 5 Years Analysis (Bibliometrics) ============
+
+            # Institutions report (last 5 years)
+            if 'openalex_institutions' in last_5_years.columns:
+                all_institutions_5y = []
+                for institutions_str in last_5_years['openalex_institutions'].dropna():
+                    if institutions_str:
+                        institutions_list = [i.strip() for i in str(institutions_str).split(';')]
+                        all_institutions_5y.extend(institutions_list)
+
+                if all_institutions_5y:
+                    institution_counts_5y = pd.Series(all_institutions_5y).value_counts().reset_index()
+                    institution_counts_5y.columns = ['institution', 'num_articles']
+                    institution_counts_5y.to_csv(reports_path / 'institutions_distribution_last_5_years.csv', index=False)
+                    logger.info("✅ Saved: reports/institutions_distribution_last_5_years.csv")
+
+        # ============ Timeline Stats for Department Authors ============
+        # Generate timeline stats filtered by department authors
+        if analysis_type in [None, 'authors', 'timeline']:
+            logger.info("Generating timeline stats for department authors...")
+            authors_dept_path = PATHS['DATABASE'] / 'authors_dpto_micro.csv'
+
+            if authors_dept_path.exists():
+                authors_dept = pd.read_csv(authors_dept_path, encoding='utf-8-sig')
+                authors_dept['Autor'] = authors_dept['Autor'].str.strip()
+                dept_author_list = authors_dept['Autor'].tolist()
+
+                # Process all articles to get author-level data
+                df_authors_all, _ = process_authors_dataframe(articles_data, year_column='year', authors_column='authors')
+                df_authors_dept = df_authors_all[df_authors_all['author'].isin(dept_author_list)]
+
+                if len(df_authors_dept) > 0:
+                    # Generate timeline stats by year and category for department authors
+                    timeline_stats_dept = df_authors_dept.groupby(['year', 'category_publindex']).size().reset_index(name='count')
+                    timeline_pivot_dept = timeline_stats_dept.pivot(index='year', columns='category_publindex', values='count').fillna(0)
+
+                    # Reorder columns by category order
+                    category_order = ['A1', 'A2', 'B', 'C', 'D', 'No Disponible']
+                    available_cats = [cat for cat in category_order if cat in timeline_pivot_dept.columns]
+                    timeline_pivot_dept = timeline_pivot_dept[available_cats]
+                    timeline_pivot_dept['Total'] = timeline_pivot_dept.sum(axis=1)
+                    timeline_pivot_dept.index.name = 'year'
+                    timeline_pivot_dept.to_csv(reports_path / 'timeline_stats_department_authors.csv')
+                    logger.info("✅ Saved: reports/timeline_stats_department_authors.csv")
+                else:
+                    logger.warning("No articles found for department authors in timeline analysis")
+            else:
+                logger.info("Department authors file not found, skipping timeline stats for department authors")
 
         # Members Analysis (research group members over time)
         if analysis_type in [None, 'members']:

@@ -631,6 +631,63 @@ def plot_countries_distribution(df, countries_col='openalex_countries', top_n=15
     return fig
 
 
+def plot_minciencias_category_distribution(authors_dept_df, category_col='Categoria_Minciencias'):
+    """
+    Creates a donut chart showing the distribution of authors by Minciencias category.
+
+    Parameters:
+    authors_dept_df (pd.DataFrame): DataFrame with department authors data
+    category_col (str): Column name for Minciencias category
+
+    Returns:
+    matplotlib.figure.Figure: The plot figure
+    """
+    # Prepare data
+    df_clean = authors_dept_df[authors_dept_df[category_col].notna()].copy()
+
+    if df_clean.empty:
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ax.text(0.5, 0.5, 'No Minciencias category data available', ha='center', va='center')
+        return fig
+
+    # Count authors by category
+    category_counts = df_clean[category_col].value_counts()
+
+    # Create figure
+    fig, ax = plt.subplots(figsize=(10, 8))
+
+    # Get colors (extended palette for 5 categories)
+    n_categories = len(category_counts)
+    colors = get_categorical_colors(n_categories)
+
+    # Create donut chart
+    wedges, texts, autotexts = ax.pie(
+        category_counts.values,
+        labels=category_counts.index,
+        autopct='%1.1f%%',
+        colors=colors,
+        startangle=90,
+        wedgeprops=dict(width=0.5, edgecolor='white'),
+        textprops={'fontsize': 11, 'weight': 'bold'}
+    )
+
+    # Improve percentage text readability
+    for autotext in autotexts:
+        autotext.set_color('white')
+        autotext.set_fontsize(10)
+
+    # Add center text showing total authors
+    total = category_counts.sum()
+    ax.text(0, 0, f'{total}\nAuthors',
+           ha='center', va='center', fontsize=16, fontweight='bold')
+
+    ax.set_title('Department Authors by Minciencias Category',
+                fontweight='bold', fontsize=14, pad=20)
+
+    plt.tight_layout()
+    return fig
+
+
 def plot_journals_analysis(df, journal_col='journal', citations_col='cited_by_count', top_n=20):
     """
     Creates a dual-axis plot showing:
