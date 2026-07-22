@@ -369,6 +369,31 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
             logger.warning("No enriched articles data found. Skipping visualization.")
             return
 
+        # Generate department-only version of consolidated articles
+        logger.info("Generating department-filtered consolidated articles...")
+        authors_dept_path = PATHS['DATABASE'] / 'authors_dpto_micro.csv'
+        if authors_dept_path.exists():
+            authors_dept = pd.read_csv(authors_dept_path, encoding='utf-8-sig')
+            authors_dept['Autor'] = authors_dept['Autor'].str.strip()
+            dept_author_list = set(authors_dept['Autor'].tolist())
+
+            # Filter articles where at least one author is in the department list
+            def has_dept_author(authors_str):
+                if pd.isna(authors_str):
+                    return False
+                # Authors are separated by commas
+                authors = [a.strip() for a in str(authors_str).split(',')]
+                return any(author in dept_author_list for author in authors)
+
+            articles_dept = articles_data[articles_data['authors'].apply(has_dept_author)].copy()
+
+            consolidated_dept_path = tables_path / "articles_consolidated_department.csv"
+            articles_dept.to_csv(consolidated_dept_path, index=False)
+            logger.info(f"✅ Saved department-filtered articles: {consolidated_dept_path}")
+            logger.info(f"   Total articles: {len(articles_data)} → Department articles: {len(articles_dept)}")
+        else:
+            logger.warning(f"Department authors file not found: {authors_dept_path}. Skipping department-filtered version.")
+
         # Expand multi-group articles for visualizations only
         # Articles reported by multiple groups (e.g., "CINBIOS, BIOTECGEN") are expanded
         # into separate rows so each group gets counted independently in the plots
@@ -929,22 +954,17 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
 
         # ============ Timeline Stats for Department Authors ============
         # Generate timeline stats filtered by department authors
+        # Uses articles_consolidated_department.csv to avoid counting same article multiple times
         if analysis_type in [None, 'authors', 'timeline']:
             logger.info("Generating timeline stats for department authors...")
-            authors_dept_path = PATHS['DATABASE'] / 'authors_dpto_micro.csv'
+            consolidated_dept_path = tables_path / "articles_consolidated_department.csv"
 
-            if authors_dept_path.exists():
-                authors_dept = pd.read_csv(authors_dept_path, encoding='utf-8-sig')
-                authors_dept['Autor'] = authors_dept['Autor'].str.strip()
-                dept_author_list = authors_dept['Autor'].tolist()
+            if consolidated_dept_path.exists():
+                articles_dept = pd.read_csv(consolidated_dept_path, dtype=str)
 
-                # Process all articles to get author-level data
-                df_authors_all, _ = process_authors_dataframe(articles_data, year_column='year', authors_column='authors')
-                df_authors_dept = df_authors_all[df_authors_all['author'].isin(dept_author_list)]
-
-                if len(df_authors_dept) > 0:
-                    # Generate timeline stats by year and category for department authors
-                    timeline_stats_dept = df_authors_dept.groupby(['year', 'category_publindex']).size().reset_index(name='count')
+                if len(articles_dept) > 0:
+                    # Generate timeline stats by year and category for department articles
+                    timeline_stats_dept = articles_dept.groupby(['year', 'category_publindex']).size().reset_index(name='count')
                     timeline_pivot_dept = timeline_stats_dept.pivot(index='year', columns='category_publindex', values='count').fillna(0)
 
                     # Reorder columns by category order
@@ -955,10 +975,11 @@ def generate_results(analysis_type=None, mailto=None, affiliation=None, api_key=
                     timeline_pivot_dept.index.name = 'year'
                     timeline_pivot_dept.to_csv(reports_path / 'timeline_stats_department_authors.csv')
                     logger.info("✅ Saved: reports/timeline_stats_department_authors.csv")
+                    logger.info(f"   Department articles in timeline: {len(articles_dept)}")
                 else:
                     logger.warning("No articles found for department authors in timeline analysis")
             else:
-                logger.info("Department authors file not found, skipping timeline stats for department authors")
+                logger.warning(f"Department consolidated file not found: {consolidated_dept_path}. Generate it first with any --analysis command.")
 
         # Members Analysis (research group members over time)
         if analysis_type in [None, 'members']:
